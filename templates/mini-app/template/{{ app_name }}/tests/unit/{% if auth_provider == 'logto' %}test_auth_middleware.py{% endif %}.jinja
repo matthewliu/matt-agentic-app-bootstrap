@@ -1,0 +1,59 @@
+"""Tests for auth middleware — validates token handling and scope enforcement."""
+
+import pytest
+from fastapi import HTTPException
+from httpx import ASGITransport, AsyncClient
+
+from app.auth.middleware import require_scope, validate_token
+from app.config import settings
+from app.db.engine import get_db
+from app.main import app
+from tests.conftest import mock_claims, override_get_db
+
+
+class TestAuthMiddleware:
+    """Test auth dependency behavior on protected endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_valid_token_returns_200(self, async_client: AsyncClient):
+        """Authenticated request succeeds."""
+        response = await async_client.get("/api/items")
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_missing_token_returns_401_or_403(self, monkeypatch):
+        """Request without Authorization header is rejected."""
+        # With no Logto app ID at all the route returns 503 auth_not_configured
+        # (see tests/integration/test_auth_not_configured.py). Configure one so
+        # this test reaches the bearer check.
+        monkeypatch.setattr(settings, "logto_app_id", "test-spa-app-id")
+        # Remove the auth override to test real behavior
+        original = app.dependency_overrides.get(validate_token)
+        app.dependency_overrides.pop(validate_token, None)
+        app.dependency_overrides[get_db] = override_get_db
+
+        try:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.get("/api/items")
+                # HTTPBearer returns 401 (Unauthorized) or 403 depending on FastAPI version
+                assert response.status_code in (401, 403)
+        finally:
+            if original:
+                app.dependency_overrides[validate_token] = original
+
+    @pytest.mark.asyncio
+    async def test_require_scope_allows_matching_scope(self):
+        """require_scope passes when token has the required scope."""
+        checker = require_scope("read")
+        result = await checker(claims=mock_claims(scope="read write"))
+        assert result["scope"] == "read write"
+
+    @pytest.mark.asyncio
+    async def test_require_scope_rejects_missing_scope(self):
+        """require_scope raises 403 when token lacks the required scope."""
+        checker = require_scope("write")
+        with pytest.raises(HTTPException) as exc_info:
+            await checker(claims=mock_claims(scope="read"))
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "Insufficient scope"

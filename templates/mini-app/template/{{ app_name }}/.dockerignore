@@ -1,0 +1,21 @@
+# Keep host build artifacts and secrets out of the Docker build context.
+# A local `pnpm install` leaves node_modules that would overwrite the
+# container's own install through `COPY frontend/ frontend/` and break `tsc`.
+**/node_modules
+**/dist
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+*.egg-info
+
+# Secrets and local state never belong in an image.
+.env
+.env.*
+!.env.example
+.bootstrap-state.json
+
+# Repo metadata and local tooling.
+.git
+.claude

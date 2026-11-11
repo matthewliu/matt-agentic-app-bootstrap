@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="auth-decision-title auth-decision-desc" id="auth-decision-root">
+        <title id="auth-decision-title">How the API decides who you are</title>
+        <desc id="auth-decision-desc">Flowchart of how a generated app's API handles a request: it checks that sign-in is set up, then checks either an agent key or a session cookie, and runs the route for that user only when the checks pass.</desc>
+        <defs>
+      <style>#auth-decision-root { --color-paper:   #fafafa;
+      --color-ink:     #18181b;
+      --color-muted:   #52525b;
+      --color-accent:  #4f46e5;
+      --font-sans:     'Figtree', system-ui, sans-serif;
+      --font-title:    'Urbanist', system-ui, sans-serif;
+      --font-mono:     ui-monospace, SFMono-Regular, Menlo, monospace; }
+      #auth-decision-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #auth-decision-root .diagram-container { width: 100%; overflow-x: auto; }
+      @media print {
+#auth-decision-root .diagram-container { overflow-x: visible; }
+}</style>
+          <marker id="auth-decision-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#52525b"/></marker>
+          <marker id="auth-decision-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f46e5"/></marker>
+          <marker id="auth-decision-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2563eb"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#fafafa"/>
+
+        <!-- ============ Arrows (drawn first, behind nodes) ============ -->
+        <!-- Start -> D1 -->
+        <line x1="168" y1="136" x2="208" y2="136" stroke="#52525b" stroke-width="1.2" marker-end="url(#auth-decision-arrow)"/>
+        <!-- D1 YES -> D2 -->
+        <line x1="384" y1="136" x2="416" y2="136" stroke="#52525b" stroke-width="1.2" marker-end="url(#auth-decision-arrow)"/>
+        <!-- D2 YES -> D3 -->
+        <line x1="592" y1="136" x2="624" y2="136" stroke="#52525b" stroke-width="1.2" marker-end="url(#auth-decision-arrow)"/>
+        <!-- D1 NO -> 503 -->
+        <path d="M 296 184 V 200 Q 296 208 288 208 H 112 Q 104 208 104 216 V 272" fill="none" stroke="#52525b" stroke-width="1.2" marker-end="url(#auth-decision-arrow)"/>
+        <!-- D2 NO -> D4 -->
+        <line x1="504" y1="184" x2="504" y2="248" stroke="#52525b" stroke-width="1.2" marker-end="url(#auth-decision-arrow)"/>
+        <!-- D3 YES -> Allowed -->
+        <path d="M 800 136 H 856 Q 864 136 864 144 V 268" fill="none" stroke="#52525b" stroke-width="1.2" marker-end="url(#auth-decision-arrow)"/>
+        <!-- D3 NO -> Refused -->
+        <line x1="712" y1="184" x2="712" y2="268" stroke="#52525b" stroke-width="1.2" marker-end="url(#auth-decision-arrow)"/>
+        <!-- D4 YES -> D5 -->
+        <line x1="504" y1="344" x2="504" y2="408" stroke="#52525b" stroke-width="1.2" marker-end="url(#auth-decision-arrow)"/>
+        <!-- D4 NO -> Refused -->
+        <line x1="592" y1="296" x2="640" y2="296" stroke="#52525b" stroke-width="1.2" marker-end="url(#auth-decision-arrow)"/>
+        <!-- D5 NO -> Refused -->
+        <path d="M 592 456 H 704 Q 712 456 712 448 V 324" fill="none" stroke="#52525b" stroke-width="1.2" marker-end="url(#auth-decision-arrow)"/>
+        <!-- D5 YES -> Allowed -->
+        <path d="M 504 504 V 516 Q 504 524 512 524 H 856 Q 864 524 864 516 V 324" fill="none" stroke="#52525b" stroke-width="1.2" marker-end="url(#auth-decision-arrow)"/>
+
+        <!-- ============ Arrow labels (masked, 6px clear of the stroke) ============ -->
+        <rect x="388" y="118" width="24" height="12" rx="2" fill="#fafafa"/>
+        <text x="400" y="127" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+        <rect x="596" y="118" width="24" height="12" rx="2" fill="#fafafa"/>
+        <text x="608" y="127" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+        <rect x="190" y="190" width="20" height="12" rx="2" fill="#fafafa"/>
+        <text x="200" y="199" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">NO</text>
+
+        <rect x="512" y="210" width="20" height="12" rx="2" fill="#fafafa"/>
+        <text x="522" y="219" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">NO</text>
+
+        <rect x="816" y="118" width="24" height="12" rx="2" fill="#fafafa"/>
+        <text x="828" y="127" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+        <rect x="720" y="220" width="20" height="12" rx="2" fill="#fafafa"/>
+        <text x="730" y="229" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">NO</text>
+
+        <rect x="512" y="370" width="24" height="12" rx="2" fill="#fafafa"/>
+        <text x="524" y="379" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+        <rect x="606" y="278" width="20" height="12" rx="2" fill="#fafafa"/>
+        <text x="616" y="287" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">NO</text>
+
+        <rect x="630" y="438" width="20" height="12" rx="2" fill="#fafafa"/>
+        <text x="640" y="447" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">NO</text>
+
+        <rect x="772" y="506" width="24" height="12" rx="2" fill="#fafafa"/>
+        <text x="784" y="515" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+        <!-- ============ Check notes beside each decision ============ -->
+        <!-- D2 note (above) -->
+        <text x="504" y="64" fill="#52525b" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">this header alone decides</text>
+        <text x="504" y="76" fill="#52525b" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">the cookie is then ignored</text>
+        <!-- D3 note (above) -->
+        <text x="712" y="64" fill="#6b6b76" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">format · hash · not expired</text>
+        <text x="712" y="76" fill="#6b6b76" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">actor header · scope</text>
+        <!-- D4 note (left) -->
+        <text x="404" y="287" fill="#6b6b76" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">signed</text>
+        <text x="404" y="299" fill="#6b6b76" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">not too old</text>
+        <text x="404" y="311" fill="#6b6b76" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">email on allowlist</text>
+        <!-- D5 note (left) -->
+        <text x="404" y="447" fill="#6b6b76" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">reads skip this check</text>
+        <text x="404" y="459" fill="#6b6b76" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">writes need X-CSRF-Token</text>
+        <text x="404" y="471" fill="#6b6b76" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">POST · PUT · PATCH · DELETE</text>
+
+        <!-- ============ Nodes ============ -->
+        <!-- Start oval -->
+        <rect x="40" y="112" width="128" height="48" rx="20" fill="#fafafa"/>
+        <rect x="40" y="112" width="128" height="48" rx="20" fill="#18181b" stroke="#18181b" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <text x="104" y="133" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Request</text>
+        <text x="104" y="149" fill="#52525b" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">to /api/*</text>
+
+        <!-- D1: sign-in settings complete? -->
+        <polygon points="296,88 384,136 296,184 208,136" fill="#ffffff" stroke="#18181b" stroke-width="1"/>
+        <text x="296" y="133" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Sign-in settings</text>
+        <text x="296" y="147" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">complete?</text>
+
+        <!-- D2: Authorization header? (focal) -->
+        <polygon points="504,88 592,136 504,184 416,136" fill="#fafafa"/>
+        <polygon points="504,88 592,136 504,184 416,136" fill="#4f46e5" stroke="#4f46e5" stroke-width="1.2" fill-opacity="0.08"/>
+        <text x="504" y="133" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Authorization</text>
+        <text x="504" y="147" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">header?</text>
+
+        <!-- D3: Valid agent key? -->
+        <polygon points="712,88 800,136 712,184 624,136" fill="#ffffff" stroke="#18181b" stroke-width="1"/>
+        <text x="712" y="140" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Valid agent key?</text>
+
+        <!-- 503 terminal -->
+        <rect x="40" y="272" width="128" height="48" rx="20" fill="#fafafa"/>
+        <rect x="40" y="272" width="128" height="48" rx="20" fill="#18181b" stroke="#18181b" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <text x="104" y="293" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Error 503</text>
+        <text x="104" y="309" fill="#52525b" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">auth_not_configured</text>
+
+        <!-- D4: Valid session cookie? -->
+        <polygon points="504,248 592,296 504,344 416,296" fill="#ffffff" stroke="#18181b" stroke-width="1"/>
+        <text x="504" y="293" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Valid session</text>
+        <text x="504" y="307" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">cookie?</text>
+
+        <!-- Refused terminal (merged 401 / 403 / 403 csrf_failed) -->
+        <rect x="640" y="268" width="144" height="56" rx="20" fill="#fafafa"/>
+        <rect x="640" y="268" width="144" height="56" rx="20" fill="#18181b" stroke="#18181b" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <text x="712" y="293" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Error 401 / 403</text>
+        <text x="712" y="309" fill="#52525b" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">or 403 csrf_failed</text>
+
+        <!-- Allowed terminal (merged) -->
+        <rect x="808" y="268" width="112" height="56" rx="20" fill="#fafafa"/>
+        <rect x="808" y="268" width="112" height="56" rx="20" fill="#18181b" stroke="#18181b" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <text x="864" y="292" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Route runs for</text>
+        <text x="864" y="306" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">that user_id</text>
+
+        <!-- D5: CSRF check passes? -->
+        <polygon points="504,408 592,456 504,504 416,456" fill="#ffffff" stroke="#18181b" stroke-width="1"/>
+        <text x="504" y="453" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">CSRF check</text>
+        <text x="504" y="467" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">passes?</text>
+
+        <!-- ============ Legend ============ -->
+        <line x1="40" y1="552" x2="920" y2="552" stroke="#18181b" stroke-width="0.8" stroke-opacity="0.10"/>
+        <text x="40" y="579" fill="#52525b" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="0.18em">LEGEND</text>
+
+        <rect x="120" y="570" width="24" height="12" rx="6" fill="#18181b" stroke="#18181b" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <text x="152" y="579" fill="#52525b" font-size="8.5" font-family="'Figtree', system-ui, sans-serif">Start or result</text>
+
+        <polygon points="288,570 300,576 288,582 276,576" fill="#ffffff" stroke="#18181b" stroke-width="1"/>
+        <text x="308" y="579" fill="#52525b" font-size="8.5" font-family="'Figtree', system-ui, sans-serif">Check</text>
+
+        <polygon points="388,570 400,576 388,582 376,576" fill="#4f46e5" stroke="#4f46e5" stroke-width="1.2" fill-opacity="0.08"/>
+        <text x="408" y="579" fill="#52525b" font-size="8.5" font-family="'Figtree', system-ui, sans-serif">Key check: picks agent key or cookie</text>
+
+      </svg>

@@ -1,0 +1,245 @@
+"""Typed operations shared by the `{{ app_name }}` CLI and MCP server.
+
+Each operation has one stable ID. The same string is the FastAPI
+``operation_id`` on the route, the entry in ``agent-context --json``, and
+the MCP tool name. Inputs and outputs are Pydantic models; the item models
+are the API's own request and response models from ``app/models/item.py``.
+
+``run()`` is the only way the CLI and the MCP server call the app: it
+validates the input, sends one HTTP request through ``app.cli.client``, and
+validates the response. Nothing here opens the database, so the API's auth
+and per-user scoping always apply.
+
+To expose a new API route to agents: give the route an ``operation_id``,
+add an ``Operation`` here, then add a CLI command and (only if agents
+should have it) an MCP tool.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Literal
+from urllib.parse import quote
+
+from pydantic import BaseModel, ValidationError
+
+from app.cli.client import {{ python_package_name.replace('_', ' ').title().replace(' ', '') }}Client, {{ python_package_name.replace('_', ' ').title().replace(' ', '') }}ClientError
+{% if include_backend %}
+import uuid
+
+from pydantic import ConfigDict, Field, model_validator
+
+from app.models.item import ItemCreate, ItemResponse, ItemUpdate
+{% endif %}
+
+{% set ClientCls = python_package_name.replace('_', ' ').title().replace(' ', '') + 'Client' %}
+{% set ClientErr = ClientCls + 'Error' %}
+# read: no data change. write: creates or changes data. destructive: deletes
+# data; never offered as an MCP tool.
+Access = Literal["read", "write", "destructive"]
+
+
+@dataclass(frozen=True)
+class Operation:
+    id: str
+    summary: str
+    method: Literal["GET", "POST", "PUT", "DELETE"]
+    path: str
+    input_model: type[BaseModel]
+    output_model: type[BaseModel]
+    access: Access
+    mcp_tool: bool
+    # Input fields that fill `{name}` placeholders in `path`.
+    path_params: tuple[str, ...] = ()
+    # When the API returns a bare JSON list, wrap it under this key so every
+    # output is an object (MCP structured output must be an object).
+    list_key: str | None = None
+{% if include_backend %}
+
+
+# ---------------------------------------------------------------------------
+# Item inputs and outputs. Limits match app/routes/items.py and
+# app/models/item.py; a test compares them with the OpenAPI document.
+# ---------------------------------------------------------------------------
+
+
+class ItemsListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skip: int = Field(0, ge=0, description="Number of items to skip (newest first).")
+    limit: int = Field(20, ge=1, le=100, description="Maximum number of items to return.")
+
+
+class ItemIdInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: uuid.UUID = Field(..., description="Item ID (a UUID).")
+
+
+class ItemsCreateInput(ItemCreate):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ItemsUpdateInput(ItemUpdate):
+    """Item ID plus the fields to change. Fields left out stay as they are."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: uuid.UUID = Field(..., description="Item ID (a UUID).")
+
+    @model_validator(mode="after")
+    def _check_fields(self) -> ItemsUpdateInput:
+        changed = self.model_fields_set - {"item_id"}
+        if not changed:
+            raise ValueError("give at least one field to change (name or description)")
+        # The API stores an explicit null; a null name breaks a NOT NULL column.
+        if "name" in changed and self.name is None:
+            raise ValueError("name cannot be null")
+        return self
+
+
+class ItemsListOutput(BaseModel):
+    items: list[ItemResponse]
+
+
+class ItemsDeleteOutput(BaseModel):
+    deleted: bool
+    item_id: str
+{% endif %}
+
+
+OPERATIONS: dict[str, Operation] = {
+{% if include_backend %}
+    op.id: op
+    for op in (
+        Operation(
+            id="items_list",
+            summary="List your items, newest first.",
+            method="GET",
+            path="/api/items",
+            input_model=ItemsListInput,
+            output_model=ItemsListOutput,
+            access="read",
+            mcp_tool=True,
+            list_key="items",
+        ),
+        Operation(
+            id="items_get",
+            summary="Get one of your items by ID.",
+            method="GET",
+            path="/api/items/{item_id}",
+            input_model=ItemIdInput,
+            output_model=ItemResponse,
+            access="read",
+            mcp_tool=True,
+            path_params=("item_id",),
+        ),
+        Operation(
+            id="items_create",
+            summary="Create an item that you own.",
+            method="POST",
+            path="/api/items",
+            input_model=ItemsCreateInput,
+            output_model=ItemResponse,
+            access="write",
+            mcp_tool=True,
+        ),
+        Operation(
+            id="items_update",
+            summary="Change the name or description of one of your items.",
+            method="PUT",
+            path="/api/items/{item_id}",
+            input_model=ItemsUpdateInput,
+            output_model=ItemResponse,
+            access="write",
+            mcp_tool=True,
+            path_params=("item_id",),
+        ),
+        Operation(
+            id="items_delete",
+            summary="Delete one of your items. Cannot be undone.",
+            method="DELETE",
+            path="/api/items/{item_id}",
+            input_model=ItemIdInput,
+            output_model=ItemsDeleteOutput,
+            access="destructive",
+            mcp_tool=False,
+            path_params=("item_id",),
+        ),
+    )
+{% endif %}
+}
+
+
+def parse_input(op_id: str, payload: dict[str, Any]) -> BaseModel:
+    """Validate ``payload`` for ``op_id``. Raises a typed client error (exit 1)."""
+    op = OPERATIONS[op_id]
+    try:
+        return op.input_model.model_validate(payload)
+    except ValidationError as exc:
+        problems = "; ".join(
+            f"{'.'.join(str(p) for p in err['loc']) or 'input'}: {err['msg']}"
+            for err in exc.errors()
+        )
+        raise {{ ClientErr }}(
+            exit_code=1,
+            message=f"invalid input for {op_id}: {problems}",
+            error_code="invalid_input",
+        ) from exc
+
+
+def run(op_id: str, client: {{ ClientCls }}, payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate, call the API, validate the response; return JSON-ready data."""
+    op = OPERATIONS[op_id]
+    data = parse_input(op_id, payload)
+
+    path = op.path
+    for name in op.path_params:
+        path = path.replace("{" + name + "}", quote(str(getattr(data, name)), safe=""))
+    # Only fields the caller set; an explicit null on update clears a column.
+    fields = data.model_dump(mode="json", exclude_unset=True, exclude=set(op.path_params))
+
+    if op.method == "GET":
+        # Query values keep their defaults so the request is explicit.
+        query = data.model_dump(mode="json", exclude=set(op.path_params))
+        raw = client.get(path, params=query or None)
+    elif op.method == "POST":
+        raw = client.post(path, json=fields)
+    elif op.method == "PUT":
+        raw = client.put(path, json=fields)
+    else:
+        client.delete(path)
+        raw = {"deleted": True, "item_id": str(getattr(data, op.path_params[0]))}
+
+    if op.list_key and isinstance(raw, list):
+        raw = {op.list_key: raw}
+    try:
+        result = op.output_model.model_validate(raw)
+    except ValidationError as exc:
+        raise {{ ClientErr }}(
+            exit_code=3,
+            message=f"unexpected response shape for {op_id}",
+            error_code="invalid_response",
+        ) from exc
+    return result.model_dump(mode="json")
+
+
+def describe() -> list[dict[str, Any]]:
+    """Machine-readable list of operations for ``agent-context --json``."""
+    return [
+        {
+            "id": op.id,
+            "summary": op.summary,
+            "access": op.access,
+            "method": op.method,
+            "path": op.path,
+            # default: always an MCP tool. opt_in: only when the server runs
+            # with the write opt-in. never: CLI only.
+            "mcp_exposure": (
+                "never" if not op.mcp_tool else "default" if op.access == "read" else "opt_in"
+            ),
+            "input_schema": op.input_model.model_json_schema(),
+            "output_schema": op.output_model.model_json_schema(),
+        }
+        for op in OPERATIONS.values()
+    ]

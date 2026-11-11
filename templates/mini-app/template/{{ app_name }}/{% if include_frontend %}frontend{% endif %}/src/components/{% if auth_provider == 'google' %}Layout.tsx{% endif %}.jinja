@@ -1,0 +1,60 @@
+import { Navigate, Outlet, useNavigate } from "react-router-dom";
+import { useAuth } from "../auth";
+import ThemeToggle from "./ThemeToggle";
+
+/** Auth-guarded layout. Sends signed-out visitors to /login. */
+export default function ProtectedLayout() {
+  const { status, email, signOut } = useAuth();
+  const navigate = useNavigate();
+
+  if (status === "loading") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg-primary">
+        <p className="text-text-muted font-body">Loading...</p>
+      </div>
+    );
+  }
+
+  if (status === "error") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg-primary px-4">
+        <p role="alert" className="text-error font-body">
+          The app could not check your sign-in. Reload the page to try again.
+        </p>
+      </div>
+    );
+  }
+
+  if (status !== "signed_in") {
+    return <Navigate to="/login" replace />;
+  }
+
+  return (
+    <div className="min-h-screen bg-bg-primary font-body">
+      <header className="border-b border-border-subtle">
+        <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between gap-4">
+            <h1 className="font-heading text-xl font-bold text-text-primary">
+              {{ app_name }}
+            </h1>
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="hidden truncate text-sm text-text-muted sm:inline">{email}</span>
+              <ThemeToggle />
+              <button
+                onClick={async () => {
+                  if (await signOut()) navigate("/login", { replace: true });
+                }}
+                className="text-sm text-text-muted border border-border-subtle px-3 py-1.5 rounded-md cursor-pointer transition-colors duration-fast hover:border-border-medium hover:text-text-secondary"
+              >
+                Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <Outlet />
+      </main>
+    </div>
+  );
+}

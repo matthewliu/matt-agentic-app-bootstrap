@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="google-sign-in-sequence-title google-sign-in-sequence-desc" id="google-sign-in-sequence-root">
+        <title id="google-sign-in-sequence-title">How Google sign-in works</title>
+        <desc id="google-sign-in-sequence-desc">Sequence diagram of Google sign-in: the browser is sent to Google, returns with a code, the app backend trades the code for an ID token, checks the token, and sets a session cookie, so the browser never holds a Google token.</desc>
+        <defs>
+      <style>#google-sign-in-sequence-root { --color-paper:   #fafafa;
+      --color-ink:     #18181b;
+      --color-muted:   #52525b;
+      --color-accent:  #4f46e5;
+      --font-sans:     'Figtree', system-ui, sans-serif;
+      --font-title:    'Urbanist', system-ui, sans-serif;
+      --font-mono:     ui-monospace, SFMono-Regular, Menlo, monospace; }
+      #google-sign-in-sequence-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #google-sign-in-sequence-root .diagram-container { width: 100%; overflow-x: auto; }
+      @media print {
+#google-sign-in-sequence-root .diagram-container { overflow-x: visible; }
+}</style>
+          <marker id="google-sign-in-sequence-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#52525b"/></marker>
+          <marker id="google-sign-in-sequence-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f46e5"/></marker>
+          <marker id="google-sign-in-sequence-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2563eb"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#fafafa"/>
+
+        <!-- LIFELINES. x: Browser 104, App 336, Google 568 -->
+        <line x1="104" y1="96" x2="104" y2="504" stroke="#18181b" stroke-width="1" stroke-dasharray="3,3" stroke-opacity="0.20"/>
+        <line x1="336" y1="96" x2="336" y2="504" stroke="#18181b" stroke-width="1" stroke-dasharray="3,3" stroke-opacity="0.20"/>
+        <line x1="568" y1="96" x2="568" y2="504" stroke="#18181b" stroke-width="1" stroke-dasharray="3,3" stroke-opacity="0.20"/>
+
+        <!-- ACTIVATION BARS -->
+        <rect x="332" y="128" width="8" height="48" fill="#18181b" stroke="#52525b" stroke-width="0.8" fill-opacity="0.06"/>
+        <rect x="332" y="256" width="8" height="176" fill="#18181b" stroke="#52525b" stroke-width="0.8" fill-opacity="0.06"/>
+        <rect x="332" y="448" width="8" height="48" fill="#18181b" stroke="#52525b" stroke-width="0.8" fill-opacity="0.06"/>
+        <rect x="564" y="192" width="8" height="48" fill="#18181b" stroke="#52525b" stroke-width="0.8" fill-opacity="0.06"/>
+        <rect x="564" y="288" width="8" height="48" fill="#18181b" stroke="#52525b" stroke-width="0.8" fill-opacity="0.06"/>
+
+        <!-- MESSAGES (time flows down) -->
+        <!-- 1 Browser to App -->
+        <line x1="104" y1="136" x2="332" y2="136" stroke="#52525b" stroke-width="1.2" marker-end="url(#google-sign-in-sequence-arrow)"/>
+        <!-- 2 App to Browser: redirect -->
+        <line x1="332" y1="168" x2="104" y2="168" stroke="#52525b" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#google-sign-in-sequence-arrow)"/>
+        <!-- 3 Browser to Google -->
+        <line x1="104" y1="200" x2="564" y2="200" stroke="#2563eb" stroke-width="1.2" marker-end="url(#google-sign-in-sequence-arrow-link)"/>
+        <!-- 4 Google to Browser: redirect -->
+        <line x1="564" y1="232" x2="104" y2="232" stroke="#52525b" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#google-sign-in-sequence-arrow)"/>
+        <!-- 5 Browser to App -->
+        <line x1="104" y1="264" x2="332" y2="264" stroke="#52525b" stroke-width="1.2" marker-end="url(#google-sign-in-sequence-arrow)"/>
+        <!-- 6 App to Google -->
+        <line x1="340" y1="296" x2="564" y2="296" stroke="#2563eb" stroke-width="1.2" marker-end="url(#google-sign-in-sequence-arrow-link)"/>
+        <!-- 7 Google to App -->
+        <line x1="564" y1="328" x2="340" y2="328" stroke="#52525b" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#google-sign-in-sequence-arrow)"/>
+        <!-- 8 App self-check (focal) -->
+        <path d="M 340 360 H 368 Q 376 360 376 368 V 380 Q 376 388 368 388 H 340" fill="none" stroke="#4f46e5" stroke-width="1.4" marker-end="url(#google-sign-in-sequence-arrow-accent)"/>
+        <!-- 9 App to Browser: session cookie -->
+        <line x1="332" y1="424" x2="104" y2="424" stroke="#52525b" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#google-sign-in-sequence-arrow)"/>
+        <!-- 10 Browser to App -->
+        <line x1="104" y1="456" x2="332" y2="456" stroke="#52525b" stroke-width="1.2" marker-end="url(#google-sign-in-sequence-arrow)"/>
+        <!-- 10 reply -->
+        <line x1="332" y1="488" x2="104" y2="488" stroke="#52525b" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#google-sign-in-sequence-arrow)"/>
+
+        <!-- MESSAGE LABELS (masked, 8px above each line) -->
+        <rect x="186" y="116" width="64" height="12" rx="2" fill="#fafafa"/>
+        <text x="218" y="125" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">GET /LOGIN</text>
+
+        <rect x="178" y="148" width="80" height="12" rx="2" fill="#fafafa"/>
+        <text x="218" y="157" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">302 TO GOOGLE</text>
+
+        <rect x="194" y="180" width="48" height="12" rx="2" fill="#fafafa"/>
+        <text x="218" y="189" fill="#2563eb" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">SIGN IN</text>
+
+        <rect x="414" y="212" width="76" height="12" rx="2" fill="#fafafa"/>
+        <text x="452" y="221" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">302 CALLBACK</text>
+
+        <rect x="178" y="244" width="80" height="12" rx="2" fill="#fafafa"/>
+        <text x="218" y="253" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">GET /CALLBACK</text>
+
+        <rect x="412" y="276" width="80" height="12" rx="2" fill="#fafafa"/>
+        <text x="452" y="285" fill="#2563eb" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">CODE+VERIFIER</text>
+
+        <rect x="426" y="308" width="52" height="12" rx="2" fill="#fafafa"/>
+        <text x="452" y="317" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">ID TOKEN</text>
+
+        <rect x="384" y="368" width="68" height="12" rx="2" fill="#fafafa"/>
+        <text x="418" y="377" fill="#4f46e5" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">CHECK TOKEN</text>
+
+        <rect x="174" y="404" width="88" height="12" rx="2" fill="#fafafa"/>
+        <text x="218" y="413" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">SESSION COOKIE</text>
+
+        <rect x="180" y="436" width="76" height="12" rx="2" fill="#fafafa"/>
+        <text x="218" y="445" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">GET /SESSION</text>
+
+        <rect x="184" y="468" width="68" height="12" rx="2" fill="#fafafa"/>
+        <text x="218" y="477" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">USER + CSRF</text>
+
+        <!-- STEP NOTES (right column, aligned to each message) -->
+        <text x="640" y="76" fill="#6b6b76" font-size="8" font-weight="500" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="0.18em">DETAIL</text>
+        <g fill="#52525b" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+          <text x="640" y="139">GET /auth/login</text>
+          <text x="640" y="165">state · nonce · PKCE S256</text>
+          <text x="640" y="177">scope: openid email</text>
+          <text x="640" y="203">the person picks a Google account</text>
+          <text x="640" y="235">/auth/callback?code&amp;state</text>
+          <text x="640" y="299">plus the client secret, server to server</text>
+          <text x="640" y="362" fill="#18181b">signature · issuer · expiry · nonce</text>
+          <text x="640" y="374" fill="#18181b">audience = this app's client ID</text>
+          <text x="640" y="386" fill="#18181b">email verified and on AUTH_ALLOWED_EMAILS</text>
+          <text x="640" y="421">HttpOnly · SameSite=Lax</text>
+          <text x="640" y="433">no Google token kept</text>
+          <text x="640" y="459">GET /auth/session</text>
+        </g>
+
+        <!-- ACTORS (drawn after lifelines and arrows) -->
+        <!-- Browser (input) -->
+        <rect x="40" y="40" width="128" height="56" rx="6" fill="#fafafa"/>
+        <rect x="40" y="40" width="128" height="56" rx="6" fill="#52525b" stroke="#6b6b76" stroke-width="1" fill-opacity="0.10"/>
+        <rect x="48" y="48" width="40" height="12" rx="2" fill="none" stroke="#6b6b76" stroke-width="0.8" stroke-opacity="0.50"/>
+        <text x="68" y="57" fill="#6b6b76" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">CLIENT</text>
+        <text x="104" y="80" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Browser</text>
+
+        <!-- App backend (backend) -->
+        <rect x="264" y="40" width="144" height="56" rx="6" fill="#fafafa"/>
+        <rect x="264" y="40" width="144" height="56" rx="6" fill="#ffffff" stroke="#18181b" stroke-width="1"/>
+        <rect x="272" y="48" width="28" height="12" rx="2" fill="none" stroke="#18181b" stroke-width="0.8" stroke-opacity="0.40"/>
+        <text x="286" y="57" fill="#52525b" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+        <text x="336" y="76" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">App backend</text>
+        <text x="336" y="89" fill="#52525b" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">FastAPI · Authlib</text>
+
+        <!-- Google (external) -->
+        <rect x="504" y="40" width="128" height="56" rx="6" fill="#fafafa"/>
+        <rect x="504" y="40" width="128" height="56" rx="6" fill="#18181b" stroke="#18181b" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <rect x="512" y="48" width="28" height="12" rx="2" fill="none" stroke="#18181b" stroke-width="0.8" stroke-opacity="0.22"/>
+        <text x="526" y="57" fill="#6b6b76" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+        <text x="568" y="80" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Google</text>
+
+        <!-- CALLOUT -->
+        <path d="M 132 524 Q 108 524 104 508" fill="none" stroke="#18181b" stroke-width="1" stroke-dasharray="4,3" stroke-opacity="0.40"/>
+        <circle cx="104" cy="506" r="2" fill="#18181b"/>
+        <text x="140" y="528" fill="#18181b" font-size="14" font-style="italic" font-family="'Urbanist', system-ui, sans-serif">The browser never holds a Google token.</text>
+
+        <!-- LEGEND -->
+        <line x1="40" y1="548" x2="920" y2="548" stroke="#18181b" stroke-width="0.8" stroke-opacity="0.10"/>
+        <text x="40" y="575" fill="#52525b" font-size="8" font-weight="500" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="0.18em">LEGEND</text>
+
+        <line x1="112" y1="572" x2="140" y2="572" stroke="#52525b" stroke-width="1.2" marker-end="url(#google-sign-in-sequence-arrow)"/>
+        <text x="148" y="575" fill="#52525b" font-size="9" font-family="'Figtree', system-ui, sans-serif">Request to the app</text>
+
+        <line x1="256" y1="572" x2="284" y2="572" stroke="#2563eb" stroke-width="1.2" marker-end="url(#google-sign-in-sequence-arrow-link)"/>
+        <text x="292" y="575" fill="#52525b" font-size="9" font-family="'Figtree', system-ui, sans-serif">Request to Google</text>
+
+        <line x1="400" y1="572" x2="428" y2="572" stroke="#52525b" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#google-sign-in-sequence-arrow)"/>
+        <text x="436" y="575" fill="#52525b" font-size="9" font-family="'Figtree', system-ui, sans-serif">Reply or redirect</text>
+
+        <line x1="544" y1="572" x2="572" y2="572" stroke="#4f46e5" stroke-width="1.4" marker-end="url(#google-sign-in-sequence-arrow-accent)"/>
+        <text x="580" y="575" fill="#52525b" font-size="9" font-family="'Figtree', system-ui, sans-serif">Token check</text>
+
+        <rect x="676" y="564" width="4" height="16" fill="#18181b" stroke="#52525b" stroke-width="0.8" fill-opacity="0.06"/>
+        <text x="688" y="575" fill="#52525b" font-size="9" font-family="'Figtree', system-ui, sans-serif">Working on a request</text>
+      </svg>

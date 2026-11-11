@@ -1,0 +1,114 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// App contains BrowserRouter; swap it for a MemoryRouter at a chosen route.
+let initialPath = "/";
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+  return {
+    ...actual,
+    BrowserRouter: ({ children }: { children: React.ReactNode }) => (
+      <actual.MemoryRouter initialEntries={[initialPath]}>{children}</actual.MemoryRouter>
+    ),
+  };
+});
+
+import App from "../App";
+
+function mockSession(status: number, body: unknown = {}) {
+  const fetchMock = vi.fn().mockResolvedValue({
+    status,
+    ok: status >= 200 && status < 300,
+    json: () => Promise.resolve(body),
+  });
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  return fetchMock;
+}
+
+describe("App with Google sign-in", () => {
+  afterEach(() => {
+    initialPath = "/";
+    vi.restoreAllMocks();
+  });
+
+  it("asks the backend who is signed in, with same-origin cookies only", async () => {
+    const fetchMock = mockSession(401, { detail: "not_authenticated" });
+    render(<App />);
+    expect(await screen.findByText("Sign in with Google")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/auth/session", { credentials: "same-origin" });
+  });
+
+  it("shows the app for a signed-in user", async () => {
+    mockSession(200, {
+      user_id: "google:1",
+      email: "owner@example.com",
+      csrf_token: "csrf",
+      auth_method: "session",
+    });
+    render(<App />);
+    expect(await screen.findByText("Welcome to {{ app_name }}")).toBeInTheDocument();
+    expect(screen.getByText("owner@example.com")).toBeInTheDocument();
+  });
+
+  it("shows the not-configured panel on 503", async () => {
+    mockSession(503, { detail: "auth_not_configured" });
+    render(<App />);
+    expect(
+      await screen.findByText("Sign-in is not configured for this deployment."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Sign in with Google")).not.toBeInTheDocument();
+  });
+
+  it("shows a loading screen until the session check answers", () => {
+    globalThis.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
+    render(<App />);
+    expect(screen.getByText("Loading...")).toBeInTheDocument();
+  });
+
+  it("stores no sign-in data in browser storage; only the theme choice", async () => {
+    const writes: string[] = [];
+    const recorder = {
+      setItem: (key: string) => writes.push(key),
+      getItem: () => null,
+      removeItem: () => undefined,
+      clear: () => undefined,
+      key: () => null,
+      length: 0,
+    };
+    vi.stubGlobal("localStorage", recorder);
+    vi.stubGlobal("sessionStorage", recorder);
+    mockSession(200, { user_id: "google:1", email: "a@example.com", csrf_token: "csrf" });
+    render(<App />);
+    await screen.findByText("Welcome to {{ app_name }}");
+    expect(writes).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: /Change theme/ }));
+    expect(writes).toEqual(["theme"]);
+    vi.unstubAllGlobals();
+  });
+
+  it("tells a removed user why they cannot sign in", async () => {
+    mockSession(403, { detail: "not_allowed" });
+    render(<App />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("not on the list");
+  });
+
+  it("keeps the user signed in when sign-out fails", async () => {
+    const signedIn = {
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({ user_id: "google:1", email: "owner@example.com", csrf_token: "c" }),
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(signedIn) // first session check
+      .mockResolvedValueOnce({ status: 403, ok: false, json: () => Promise.resolve({}) }) // logout
+      .mockResolvedValueOnce(signedIn); // session check after the failure
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    render(<App />);
+    fireEvent.click(await screen.findByText("Sign Out"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(fetchMock.mock.calls[1][0]).toBe("/auth/logout");
+    expect(screen.getByText("Welcome to {{ app_name }}")).toBeInTheDocument();
+  });
+});

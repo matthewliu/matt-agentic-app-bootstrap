@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint with ruff
+        run: ruff check .
+
+      - name: Run tests
+        run: pytest
+{% if include_frontend %}
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          # No `cache: "pnpm"` here: setup-node derives its cache key from a
+          # lockfile and hard-errors ("Dependencies lock file is not found")
+          # when there is none — before install even runs. Restore it together
+          # with a committed pnpm-lock.yaml.
+
+      - name: Install dependencies
+        # Must match the Dockerfile and mobile/eas.json: no committed pnpm-lock.yaml, and pnpm turns --frozen-lockfile ON by default when CI=true, so it must be disabled explicitly or the install dies with ERR_PNPM_NO_LOCKFILE. Commit a lockfile and flip these to --frozen-lockfile together.
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Run tests
+        working-directory: frontend
+        run: pnpm test
+
+      - name: Type check
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Build
+        working-directory: frontend
+        run: pnpm run build
+{% endif %}

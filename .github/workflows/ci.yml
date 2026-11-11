@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to the same branch makes the in-flight run obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e '.[dev]'
+
+      # The rule set is pinned in pyproject.toml rather than left to ruff's
+      # default selection, so this cannot go red on an unrelated ruff release.
+      - name: ruff check
+        run: ruff check .
+
+  test:
+    name: pytest (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is the floor declared in `requires-python`. That claim had never
+        # actually been exercised — the suite was only ever run on the
+        # maintainer's 3.14. Testing both means the floor is verified rather
+        # than asserted.
+        python-version: ["3.12", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # `[dev]` must be complete: the template tests render the mini-app and
+      # import it in-process, so the GENERATED app's runtime deps have to be
+      # installed here too. A fresh runner is what catches an omission — the
+      # suite passed locally for months on packages that were only installed
+      # incidentally.
+      - name: Install
+        run: pip install -e '.[dev]'
+
+      # Integration tests shell out to the `copier` binary, which conftest
+      # resolves next to sys.executable. Fail loudly here rather than as a
+      # confusing FileNotFoundError inside a test.
+      - name: Verify copier is on the interpreter's path
+        run: python -c "import pathlib, sys; p = pathlib.Path(sys.executable).parent / 'copier'; assert p.exists(), f'copier missing at {p}'; print(p)"
+
+      # ~5.5 min: most of it is integration tests that render the Copier
+      # template and run subprocesses.
+      - name: pytest
+        run: pytest -q
+        timeout-minutes: 20

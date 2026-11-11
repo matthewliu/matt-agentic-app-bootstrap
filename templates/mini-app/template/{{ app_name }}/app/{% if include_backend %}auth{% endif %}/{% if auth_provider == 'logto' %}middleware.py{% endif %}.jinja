@@ -1,0 +1,400 @@
+"""JWT validation middleware for Logto integration.
+
+This app is reached by two kinds of caller and they are NOT interchangeable:
+
+  * **User tokens** — minted by this app's Logto SPA after a human logs in.
+    `sub` is the user id. These are what the React frontend sends.
+  * **M2M tokens** — minted by this app's Logto Machine-to-Machine client via
+    the `client_credentials` grant, used by `app/cli/` and by agents. Logto
+    sets `sub == client_id` on these, which is how we tell them apart.
+
+Both must pass the shared checks (R9):
+
+  1. iss   == settings.logto_endpoint + "/oidc"
+  2. aud   == settings.logto_api_resource (exact)
+  3. signature verifies against Logto's JWKS (cached in-memory; refresh on kid
+     miss to support key rotation)
+  4. exp   not expired (5s leeway)
+  5. required scope present in the `scope` claim (configurable via
+     {{ app_name | replace('-', '_') | upper }}_REQUIRED_SCOPE; default "read")
+
+M2M tokens must additionally pass (R9, Invariants 1-2):
+
+  6. client_id OR azp == settings.logto_m2m_agent_app_id — the token was minted
+     for THIS app's M2M client, not a sibling app's.
+  7. X-{{ app_name | replace('-', '_') | upper }}-Actor-Sub header present AND in the
+     {{ app_name | replace('-', '_') | upper }}_M2M_ACTOR_SUBS allowlist. Missing => 403,
+     fail-closed. On success `sub` is rewritten to the actor so writes land
+     under the human's identity rather than the robot's.
+
+User tokens deliberately IGNORE the actor-sub header. Honouring it there would
+let any logged-in user act as any other user by setting a header — the header
+is an M2M delegation mechanism, not an identity override.
+
+Per Invariant 7, every PASS/FAIL emits a structured JSON log line with the
+required fields (aud, sub, x_actor_sub_header, configured_app_slug, decision)
+so the nightly cross-app reuse-detection cron can spot tokens from app A landing
+on app B's deployment.
+"""
+
+import json
+import logging
+import os
+import threading
+import time
+from typing import Any, NoReturn
+
+import certifi
+import jwt
+import requests
+from fastapi import Depends, HTTPException, Request, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from app.config import settings
+
+LOGTO_ENDPOINT = settings.logto_endpoint
+LOGTO_API_RESOURCE = settings.logto_api_resource
+JWKS_URL = f"{LOGTO_ENDPOINT}/oidc/jwks"
+ISSUER = f"{LOGTO_ENDPOINT}/oidc"
+
+# Per-app configuration. APP_SLUG is the canonical configured slug; the header
+# name and allowlist env var name derive from it (uppercase, hyphens to underscores).
+APP_SLUG = "{{ app_name }}"
+APP_UPPER = "{{ app_name | replace('-', '_') | upper }}"
+# Header lookup is case-insensitive in Starlette/FastAPI; canonical spelling
+# is `X-{APP_UPPER}-Actor-Sub` per spec §B2 / R9.
+ACTOR_SUB_HEADER = f"x-{APP_UPPER}-actor-sub"
+ALLOWLIST_ENV = f"{APP_UPPER}_M2M_ACTOR_SUBS"
+REQUIRED_SCOPE_ENV = f"{APP_UPPER}_REQUIRED_SCOPE"
+# `agentic_core.bootstrap.logto.create_scopes` provisions exactly `read`
+# and `write` on every per-app API resource. Requiring a scope it never
+# creates (e.g. "<slug>:api") 403s every caller.
+DEFAULT_REQUIRED_SCOPE = "read"
+EXP_LEEWAY_SECONDS = 5
+
+logger = logging.getLogger("app.auth.middleware")
+if not logger.handlers:
+    # Default to a basic stderr handler so structured logs land somewhere even
+    # when the host process hasn't configured logging. Idempotent.
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(_h)
+logger.setLevel(logging.INFO)
+
+
+# ---------------------------------------------------------------------------
+# JWKS cache — keyed by kid; TTL-based; refresh-on-kid-miss for key rotation.
+# ---------------------------------------------------------------------------
+
+_JWKS_CACHE_TTL_SECONDS = 300
+_jwks_cache_lock = threading.Lock()
+_jwks_cache: dict[str, Any] = {"keys_by_kid": {}, "fetched_at": 0.0}
+
+
+def _fetch_jwks() -> dict[str, Any]:
+    """Fetch the JWKS document from Logto. Uses `requests` for testability."""
+    resp = requests.get(JWKS_URL, timeout=5, verify=certifi.where())
+    resp.raise_for_status()
+    data = resp.json()
+    if not isinstance(data, dict) or "keys" not in data:
+        raise RuntimeError("malformed JWKS response from Logto")
+    return data
+
+
+def _load_jwks_into_cache() -> None:
+    data = _fetch_jwks()
+    keys_by_kid: dict[str, Any] = {}
+    for jwk_dict in data.get("keys", []):
+        kid = jwk_dict.get("kid")
+        if not kid:
+            continue
+        # Build a signing key from the JWK; pyjwt picks the algorithm per kty/crv.
+        key_obj = jwt.PyJWK(jwk_dict).key
+        keys_by_kid[kid] = key_obj
+    with _jwks_cache_lock:
+        _jwks_cache["keys_by_kid"] = keys_by_kid
+        _jwks_cache["fetched_at"] = time.time()
+
+
+def _get_signing_key(kid: str):
+    """Return the signing key for `kid`, refreshing the JWKS once on miss."""
+    with _jwks_cache_lock:
+        cached = _jwks_cache["keys_by_kid"].get(kid)
+        fresh = (time.time() - _jwks_cache["fetched_at"]) < _JWKS_CACHE_TTL_SECONDS
+
+    if cached is not None and fresh:
+        return cached
+
+    # Either kid miss or cache stale → refresh once, then re-look-up.
+    _load_jwks_into_cache()
+    with _jwks_cache_lock:
+        key = _jwks_cache["keys_by_kid"].get(kid)
+    if key is None:
+        raise jwt.PyJWKClientError(f"unknown kid {kid!r} in JWKS")
+    return key
+
+
+def _reset_jwks_cache_for_tests() -> None:
+    """Test hook: zero the JWKS cache. Not used at runtime."""
+    with _jwks_cache_lock:
+        _jwks_cache["keys_by_kid"] = {}
+        _jwks_cache["fetched_at"] = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Structured logging — Invariant 7
+# ---------------------------------------------------------------------------
+
+
+def _log_decision(
+    *,
+    aud: Any,
+    sub: Any,
+    x_actor_sub_header: Any,
+    decision: str,
+) -> None:
+    """Emit a single-line JSON log record with the five required fields."""
+    record = {
+        "aud": aud,
+        "sub": sub,
+        "x_actor_sub_header": x_actor_sub_header,
+        "configured_app_slug": APP_SLUG,
+        "decision": decision,
+    }
+    logger.info(json.dumps(record, default=str))
+
+
+# ---------------------------------------------------------------------------
+# FastAPI dependency
+# ---------------------------------------------------------------------------
+
+security = HTTPBearer(auto_error=False)
+
+
+def _allowed_actor_subs() -> set[str]:
+    """Parse {{ app_name | replace('-', '_') | upper }}_M2M_ACTOR_SUBS env var (comma-separated)."""
+    raw = os.environ.get(ALLOWLIST_ENV, "")
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def _required_scope() -> str:
+    return os.environ.get(REQUIRED_SCOPE_ENV, DEFAULT_REQUIRED_SCOPE)
+
+
+def _is_m2m_token(claims: dict) -> bool:
+    """True if this token came from the `client_credentials` grant.
+
+    Logto sets `sub == client_id` on M2M tokens. A user token's `sub` is the
+    user id, so even if Logto starts emitting `client_id` on user tokens the
+    equality still separates them — which is why this checks both rather than
+    just `"client_id" in claims`.
+    """
+    client_id = claims.get("client_id")
+    return bool(client_id) and claims.get("sub") == client_id
+
+
+def _reject(
+    *,
+    status_code: int,
+    reason: str,
+    aud: Any = None,
+    sub: Any = None,
+    actor_header: Any = None,
+) -> NoReturn:
+    _log_decision(
+        aud=aud,
+        sub=sub,
+        x_actor_sub_header=actor_header,
+        decision=f"{status_code}:{reason}",
+    )
+    raise HTTPException(status_code=status_code, detail=reason)
+
+
+async def validate_token(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Security(security),
+) -> dict:
+    """Validate a Bearer JWT + actor-sub header. Returns decoded claims on success.
+
+    All rejection paths emit a structured log line before raising HTTPException.
+    """
+    # Pre-decode: pull the actor-sub header for log visibility on early rejects.
+    actor_header_raw = request.headers.get(ACTOR_SUB_HEADER)
+
+    # No Logto app at all (e.g. a Render deploy created before auth exists):
+    # lock every protected route, whatever token is sent. This runs before the
+    # decode so no JWKS fetch happens and no unverified token can reach data.
+    if not settings.logto_app_id and not settings.logto_m2m_agent_app_id:
+        _reject(
+            status_code=503,
+            reason="auth_not_configured",
+            actor_header=actor_header_raw,
+        )
+
+    if credentials is None or not credentials.credentials:
+        _reject(
+            status_code=401,
+            reason="missing_bearer",
+            actor_header=actor_header_raw,
+        )
+
+    token = credentials.credentials
+
+    # ----- Sig + iss + aud + exp via pyjwt -----------------------------------
+    try:
+        unverified = jwt.get_unverified_header(token)
+        kid = unverified.get("kid")
+        if not kid:
+            _reject(
+                status_code=401,
+                reason="missing_kid",
+                actor_header=actor_header_raw,
+            )
+        signing_key = _get_signing_key(kid)
+        claims = jwt.decode(
+            token,
+            signing_key,
+            algorithms=["ES384", "RS256"],
+            audience=LOGTO_API_RESOURCE,
+            issuer=ISSUER,
+            leeway=EXP_LEEWAY_SECONDS,
+            options={"require": ["exp", "iss", "aud"]},
+        )
+    except jwt.ExpiredSignatureError:
+        _reject(
+            status_code=401,
+            reason="expired",
+            actor_header=actor_header_raw,
+        )
+    except jwt.InvalidAudienceError:
+        _reject(
+            status_code=401,
+            reason="invalid_audience",
+            actor_header=actor_header_raw,
+        )
+    except jwt.InvalidIssuerError:
+        _reject(
+            status_code=401,
+            reason="invalid_issuer",
+            actor_header=actor_header_raw,
+        )
+    except (jwt.PyJWKClientError, jwt.InvalidSignatureError, jwt.DecodeError, jwt.PyJWTError):
+        _reject(
+            status_code=401,
+            reason="invalid_signature",
+            actor_header=actor_header_raw,
+        )
+
+    aud_claim = claims.get("aud")
+    sub_claim = claims.get("sub")
+
+    # ----- Required scope — applies to BOTH token kinds ------------------------
+    needed = _required_scope()
+    scopes_str = claims.get("scope", "") or ""
+    scopes = scopes_str.split() if isinstance(scopes_str, str) else []
+    claims["scopes"] = scopes
+    if needed and needed not in scopes:
+        _reject(
+            status_code=403,
+            reason="missing_scope",
+            aud=aud_claim,
+            sub=sub_claim,
+            actor_header=actor_header_raw,
+        )
+
+    # ----- User tokens: done. --------------------------------------------------
+    # The actor-sub header is deliberately NOT honoured here. It is an M2M
+    # delegation mechanism; letting a logged-in user set it would be a
+    # self-impersonation vector (any user could act as any other user).
+    if not _is_m2m_token(claims):
+        _log_decision(
+            aud=aud_claim,
+            sub=sub_claim,
+            x_actor_sub_header=actor_header_raw,
+            decision="200:ok_user",
+        )
+        return claims
+
+    # ----- M2M tokens: client pinning + actor-sub delegation -------------------
+    # Fail-closed if the operator didn't configure LOGTO_M2M_AGENT_APP_ID. A
+    # silent skip here would defeat Invariant 2 (a misconfigured deployment
+    # would accept M2M tokens minted for ANY client in the tenant).
+    expected_m2m = settings.logto_m2m_agent_app_id
+    if not expected_m2m:
+        _reject(
+            status_code=503,
+            reason="m2m_app_id_unconfigured",
+            aud=aud_claim,
+            sub=sub_claim,
+            actor_header=actor_header_raw,
+        )
+    client_id = claims.get("client_id")
+    azp = claims.get("azp")
+    if client_id != expected_m2m and azp != expected_m2m:
+        _reject(
+            status_code=403,
+            reason="wrong_client_id",
+            aud=aud_claim,
+            sub=sub_claim,
+            actor_header=actor_header_raw,
+        )
+
+    # Actor-sub header REQUIRED for M2M + allowlisted (fail-closed, R9).
+    if actor_header_raw is None or not actor_header_raw.strip():
+        _reject(
+            status_code=403,
+            reason="missing_actor_sub_header",
+            aud=aud_claim,
+            sub=sub_claim,
+            actor_header="<missing>",
+        )
+
+    allowlist = _allowed_actor_subs()
+    if not allowlist or actor_header_raw not in allowlist:
+        _reject(
+            status_code=403,
+            reason="actor_sub_not_allowed",
+            aud=aud_claim,
+            sub=sub_claim,
+            actor_header=actor_header_raw,
+        )
+
+    # Writes land under the human's identity, not the robot's.
+    claims["sub"] = actor_header_raw
+    claims["m2m_acting_as"] = actor_header_raw
+
+    _log_decision(
+        aud=aud_claim,
+        sub=actor_header_raw,
+        x_actor_sub_header=actor_header_raw,
+        decision="200:ok_m2m",
+    )
+    return claims
+
+
+async def get_current_user_id(claims: dict = Depends(validate_token)) -> str:
+    """Extract user ID from validated JWT sub claim."""
+    return claims["sub"]
+
+
+def require_scope(required: str):
+    """Dependency factory that enforces a specific scope on the token.
+
+    NOTE: the primary required scope is enforced inside `validate_token` via
+    {{ app_name | replace('-', '_') | upper }}_REQUIRED_SCOPE. This factory is kept for per-route
+    additional scope checks (defense in depth).
+    """
+
+    async def _check(claims: dict = Depends(validate_token)) -> dict:
+        scopes = claims.get("scope", "").split()
+        if required not in scopes:
+            _log_decision(
+                aud=claims.get("aud"),
+                sub=claims.get("sub"),
+                x_actor_sub_header=None,
+                decision="403:insufficient_scope",
+            )
+            raise HTTPException(status_code=403, detail="Insufficient scope")
+        return claims
+
+    return _check

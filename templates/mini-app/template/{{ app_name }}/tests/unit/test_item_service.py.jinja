@@ -1,0 +1,81 @@
+"""Tests for item service — CRUD operations against the database."""
+
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models import UserProfile
+from app.models.item import ItemCreate, ItemUpdate
+from app.services import item_service
+from tests.conftest import TEST_USER_ID
+
+
+class TestItemService:
+    """Test item service CRUD functions."""
+
+    @pytest.mark.asyncio
+    async def test_create_item(self, db_session: AsyncSession, test_user: UserProfile):
+        """Creating an item returns an item with ID and timestamps."""
+        data = ItemCreate(name="Test Item", description="A test item")
+        item = await item_service.create_item(db_session, TEST_USER_ID, data)
+        assert item.id is not None
+        assert item.name == "Test Item"
+        assert item.description == "A test item"
+        assert item.user_id == TEST_USER_ID
+        assert item.created_at is not None
+
+    @pytest.mark.asyncio
+    async def test_get_item(self, db_session: AsyncSession, test_user: UserProfile):
+        """Getting an item by ID returns the correct item."""
+        data = ItemCreate(name="Find Me", description=None)
+        created = await item_service.create_item(db_session, TEST_USER_ID, data)
+        found = await item_service.get_item(db_session, TEST_USER_ID, created.id)
+        assert found is not None
+        assert found.id == created.id
+        assert found.name == "Find Me"
+
+    @pytest.mark.asyncio
+    async def test_get_item_not_found(self, db_session: AsyncSession, test_user: UserProfile):
+        """Getting a nonexistent item returns None."""
+        result = await item_service.get_item(db_session, TEST_USER_ID, "nonexistent-id")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_item_wrong_user(self, db_session: AsyncSession, test_user: UserProfile):
+        """Getting another user's item returns None (user isolation)."""
+        data = ItemCreate(name="Private Item")
+        created = await item_service.create_item(db_session, TEST_USER_ID, data)
+        result = await item_service.get_item(db_session, "other-user-id", created.id)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_items_pagination(self, db_session: AsyncSession, test_user: UserProfile):
+        """Listing items respects skip and limit."""
+        for i in range(5):
+            await item_service.create_item(
+                db_session, TEST_USER_ID, ItemCreate(name=f"Item {i}")
+            )
+        items = await item_service.get_items(db_session, TEST_USER_ID, skip=0, limit=3)
+        assert len(items) == 3
+
+        items_page2 = await item_service.get_items(db_session, TEST_USER_ID, skip=3, limit=3)
+        assert len(items_page2) == 2
+
+    @pytest.mark.asyncio
+    async def test_update_item(self, db_session: AsyncSession, test_user: UserProfile):
+        """Updating an item changes the specified fields."""
+        data = ItemCreate(name="Original", description="Original desc")
+        item = await item_service.create_item(db_session, TEST_USER_ID, data)
+        update = ItemUpdate(name="Updated")
+        updated = await item_service.update_item(db_session, item, update)
+        assert updated.name == "Updated"
+        assert updated.description == "Original desc"  # unchanged
+
+    @pytest.mark.asyncio
+    async def test_delete_item(self, db_session: AsyncSession, test_user: UserProfile):
+        """Deleting an item removes it from the database."""
+        data = ItemCreate(name="Delete Me")
+        item = await item_service.create_item(db_session, TEST_USER_ID, data)
+        item_id = item.id
+        await item_service.delete_item(db_session, item)
+        result = await item_service.get_item(db_session, TEST_USER_ID, item_id)
+        assert result is None

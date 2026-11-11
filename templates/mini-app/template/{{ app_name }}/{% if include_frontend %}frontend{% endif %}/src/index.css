@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Theme colors, fonts, spacing, radii, shadows, motion, and breakpoints come
+ * from src/design/tokens.ts. tailwind.config.ts writes them as CSS variables
+ * (light mode, dark mode, and the manual data-theme choice). Do not add color
+ * values here. See DESIGN.md.
+ */

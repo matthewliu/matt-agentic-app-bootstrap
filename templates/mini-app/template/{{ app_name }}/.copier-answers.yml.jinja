@@ -1,0 +1,10 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
+#
+# This file is what makes `copier update` work: it records the answers this app
+# was generated with so a later template fix can be replayed onto it. A
+# hand-maintained subset silently drops whichever questions nobody remembered
+# to add — `variant`, `with_auth` and `with_db` were all missing, so an update
+# would have re-answered them from defaults and reshaped the app. Dumping
+# `_copier_answers` records every question automatically, including ones added
+# to copier.yml later.
+{{ _copier_answers|to_nice_yaml -}}

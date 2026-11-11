@@ -1,0 +1,63 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { describe, expect, it, vi } from "vitest";
+
+const mockUseAuth = vi.fn();
+vi.mock("../auth", () => ({ useAuth: () => mockUseAuth() }));
+
+import ProtectedLayout from "../components/Layout";
+
+function renderLayout() {
+  return render(
+    <MemoryRouter initialEntries={["/"]}>
+      <Routes>
+        <Route path="/login" element={<p>login page</p>} />
+        <Route element={<ProtectedLayout />}>
+          <Route path="/" element={<p>home</p>} />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+describe("ProtectedLayout with Google sign-in", () => {
+  it("shows loading while the session check runs", () => {
+    mockUseAuth.mockReturnValue({ status: "loading", signOut: vi.fn() });
+    renderLayout();
+    expect(screen.getByText("Loading...")).toBeInTheDocument();
+  });
+
+  it("sends a signed-out visitor to /login", () => {
+    mockUseAuth.mockReturnValue({ status: "signed_out", signOut: vi.fn() });
+    renderLayout();
+    expect(screen.getByText("login page")).toBeInTheDocument();
+  });
+
+  it("shows an error when the session check fails", () => {
+    mockUseAuth.mockReturnValue({ status: "error", signOut: vi.fn() });
+    renderLayout();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
+  it("shows the app, the email, and signs out", async () => {
+    const signOut = vi.fn().mockResolvedValue(true);
+    mockUseAuth.mockReturnValue({ status: "signed_in", email: "owner@example.com", signOut });
+    renderLayout();
+    expect(screen.getByText("{{ app_name }}")).toBeInTheDocument();
+    expect(screen.getByText("owner@example.com")).toBeInTheDocument();
+    expect(screen.getByText("home")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Sign Out"));
+    await waitFor(() => expect(screen.getByText("login page")).toBeInTheDocument());
+    expect(signOut).toHaveBeenCalledOnce();
+  });
+
+  it("stays on the page when the backend did not end the session", async () => {
+    const signOut = vi.fn().mockResolvedValue(false);
+    mockUseAuth.mockReturnValue({ status: "signed_in", email: "owner@example.com", signOut });
+    renderLayout();
+    fireEvent.click(screen.getByText("Sign Out"));
+    await waitFor(() => expect(signOut).toHaveBeenCalledOnce());
+    expect(screen.queryByText("login page")).not.toBeInTheDocument();
+    expect(screen.getByText("home")).toBeInTheDocument();
+  });
+});

@@ -1,0 +1,63 @@
+import { LogtoProvider } from "@logto/react";
+import { useMemo } from "react";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { getLogtoConfig } from "./config";
+import ProtectedLayout from "./components/Layout";
+import CallbackPage from "./pages/CallbackPage";
+import LoginPage from "./pages/LoginPage";
+
+function App() {
+  const logto = useMemo(() => getLogtoConfig(), []);
+  if (!logto.configured) {
+    return <AuthNotConfigured missing={logto.missing} />;
+  }
+  return (
+    <LogtoProvider config={logto.config}>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/callback" element={<CallbackPage />} />
+          <Route element={<ProtectedLayout />}>
+            <Route path="/" element={<WelcomePage />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </LogtoProvider>
+  );
+}
+
+function AuthNotConfigured({ missing }: { missing: string[] }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-bg-primary px-4">
+      <div
+        role="alert"
+        className="w-full max-w-md rounded-lg bg-bg-secondary border border-border-subtle p-8 shadow-md text-center"
+      >
+        <h1 className="font-heading text-2xl font-bold text-text-primary mb-2">
+          {{ app_name }}
+        </h1>
+        <p className="font-body font-medium text-text-primary mb-2">
+          Sign-in is not configured for this deployment.
+        </p>
+        <p className="font-body text-text-secondary">
+          Missing build settings: {missing.join(", ")}.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function WelcomePage() {
+  return (
+    <div className="text-center py-16">
+      <h2 className="font-heading text-3xl font-bold text-text-primary mb-4">
+        Welcome to {{ app_name }}
+      </h2>
+      <p className="text-text-secondary font-body">
+        {{ app_description }}
+      </p>
+    </div>
+  );
+}
+
+export default App;

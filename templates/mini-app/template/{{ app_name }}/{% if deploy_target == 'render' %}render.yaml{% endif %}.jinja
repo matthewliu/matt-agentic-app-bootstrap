@@ -1,0 +1,74 @@
+# Render Blueprint: the only deploy definition for this app.
+# Apply it once with New > Blueprint in the Render dashboard. After that, a
+# change to this file merged to `main` syncs to the live services.
+# tests/unit/test_render_blueprint.py guards the security-relevant fields.
+services:
+  - type: web
+    name: {{ app_name }}
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: 0.5c-512mb
+    region: oregon
+    healthCheckPath: /health
+    # CI runs on every push to main; deploy only after it passes.
+    autoDeployTrigger: checksPass
+{%- if include_db %}
+    # No arguments: Render runs this as `/bin/sh -c <words>`, so only the
+    # first word would run. See app/db/migrate.py.
+    preDeployCommand: {{ app_name }}-migrate
+{%- if auth_provider == 'google' %}
+    # DATABASE_URL and the Google sign-in settings only. Render passes every
+    # service env var to the Docker build, so CLI-only secrets must never be
+    # added here. The Dockerfile declares no build ARG for these values.
+{%- else %}
+    # Only DATABASE_URL is declared. Render passes every service env var to
+    # the Docker build, so CLI-only secrets must never be added here.
+{%- endif %}
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: {{ app_name }}-db
+          property: connectionString
+{%- if auth_provider == 'google' %}
+      # Google sign-in (see the setup guide in README.md). Set the sync: false
+      # values in the Render dashboard; they never go in git. Until all are
+      # set, every protected route returns 503 auth_not_configured.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: AUTH_ALLOWED_EMAILS
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      # Agent keys for the CLI and MCP server: hashes only, never keys.
+      - key: AGENT_CREDENTIALS
+        sync: false
+{%- endif %}
+
+databases:
+  - name: {{ app_name }}-db
+    plan: 0.1c-256mb
+    region: oregon
+    postgresMajorVersion: "16"
+    diskSizeGB: 1
+    # Empty list: no connections from outside Render's private network.
+    # Omitting the key would allow connections from any IP address.
+    ipAllowList: []
+{%- elif auth_provider == 'google' %}
+    envVars:
+      # Google sign-in (see the setup guide in README.md). Set the sync: false
+      # values in the Render dashboard; they never go in git. Until all are
+      # set, every protected route returns 503 auth_not_configured.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: AUTH_ALLOWED_EMAILS
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      # Agent keys for the CLI and MCP server: hashes only, never keys.
+      - key: AGENT_CREDENTIALS
+        sync: false
+{%- endif %}

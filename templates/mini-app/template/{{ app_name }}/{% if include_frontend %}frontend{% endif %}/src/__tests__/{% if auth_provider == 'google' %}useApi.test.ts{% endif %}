@@ -1,0 +1,85 @@
+import { renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../auth", () => ({
+  useAuth: () => ({ status: "signed_in", csrfToken: "csrf-123" }),
+}));
+
+import { useApi } from "../hooks/useApi";
+
+function mockResponse(status: number, body: unknown = {}) {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.resolve(body),
+  });
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  return fetchMock;
+}
+
+function lastCall(fetchMock: ReturnType<typeof vi.fn>) {
+  const [path, init] = fetchMock.mock.calls[0];
+  return { path, init: init as RequestInit, headers: (init as RequestInit).headers as Headers };
+}
+
+describe("useApi with Google sign-in", () => {
+  const assign = vi.fn();
+
+  beforeEach(() => {
+    assign.mockReset();
+    vi.spyOn(window, "location", "get").mockReturnValue({
+      ...window.location,
+      assign,
+    } as Location);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("sends the cookie and no Authorization header", async () => {
+    const fetchMock = mockResponse(200, []);
+    const { result } = renderHook(() => useApi());
+    await result.current.apiFetch("/api/items");
+    const { init, headers } = lastCall(fetchMock);
+    expect(init.credentials).toBe("same-origin");
+    expect(headers.get("Authorization")).toBeNull();
+    expect(headers.get("X-CSRF-Token")).toBeNull();
+  });
+
+  it("sends the CSRF token on writes", async () => {
+    const fetchMock = mockResponse(201, { id: "1" });
+    const { result } = renderHook(() => useApi());
+    await result.current.apiFetch("/api/items", { method: "post", body: "{}" });
+    const { init, headers } = lastCall(fetchMock);
+    expect(init.method).toBe("POST");
+    expect(headers.get("X-CSRF-Token")).toBe("csrf-123");
+  });
+
+  it("sends an expired session to the login page", async () => {
+    mockResponse(401, { detail: "session_expired" });
+    const { result } = renderHook(() => useApi());
+    await expect(result.current.apiFetch("/api/items")).rejects.toThrow("Request failed (401)");
+    expect(assign).toHaveBeenCalledWith("/login?error=session_expired");
+  });
+
+  it("sends a removed user to the login page", async () => {
+    mockResponse(403, { detail: "not_allowed" });
+    const { result } = renderHook(() => useApi());
+    await expect(result.current.apiFetch("/api/items")).rejects.toThrow("Request failed (403)");
+    expect(assign).toHaveBeenCalledWith("/login?error=not_allowed");
+  });
+
+  it("does not redirect on other errors", async () => {
+    mockResponse(500, { detail: "Internal server error" });
+    const { result } = renderHook(() => useApi());
+    await expect(result.current.apiFetch("/api/items")).rejects.toThrow("Request failed (500)");
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("returns undefined for 204 No Content", async () => {
+    mockResponse(204);
+    const { result } = renderHook(() => useApi());
+    expect(await result.current.apiFetch("/api/items/1", { method: "DELETE" })).toBeUndefined();
+  });
+});

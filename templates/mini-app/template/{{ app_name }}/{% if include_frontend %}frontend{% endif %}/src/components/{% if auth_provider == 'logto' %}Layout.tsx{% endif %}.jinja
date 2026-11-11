@@ -1,0 +1,56 @@
+import { useLogto } from "@logto/react";
+import { useRef } from "react";
+import { Navigate, Outlet } from "react-router-dom";
+
+/**
+ * Auth-guarded layout wrapper. Redirects to /login if not authenticated.
+ *
+ * useRef tracks wasAuthenticated to prevent redirect loops during Logto's
+ * async sign-in state transitions — do NOT simplify to plain
+ * `if (!isAuthenticated) redirect`.
+ */
+export default function ProtectedLayout() {
+  const { isAuthenticated, isLoading, signOut } = useLogto();
+  const wasAuthenticated = useRef(false);
+
+  if (isAuthenticated) {
+    wasAuthenticated.current = true;
+  }
+
+  // Only show loading on initial page load.
+  // Once authenticated, keep children mounted during token refreshes.
+  if (isLoading && !wasAuthenticated.current) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg-primary">
+        <p className="text-text-muted font-body">Loading...</p>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated && !wasAuthenticated.current) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return (
+    <div className="min-h-screen bg-bg-primary font-body">
+      <header className="border-b border-border-subtle">
+        <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between">
+            <h1 className="font-heading text-xl font-bold text-text-primary">
+              {{ app_name }}
+            </h1>
+            <button
+              onClick={() => signOut(`${window.location.origin}/login`)}
+              className="text-sm text-text-muted border border-border-subtle px-3 py-1.5 rounded-md cursor-pointer transition-colors duration-fast hover:border-border-medium hover:text-text-secondary"
+            >
+              Sign Out
+            </button>
+          </div>
+        </div>
+      </header>
+      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <Outlet />
+      </main>
+    </div>
+  );
+}

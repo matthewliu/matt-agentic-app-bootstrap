@@ -1,0 +1,17 @@
+{
+  "env": {
+    "CLAUDE_CODE_TASK_LIST_ID": "agentic-core"
+  },
+  "permissions": {
+    "deny": [
+      "Bash(sudo *)",
+      "Bash(su *)",
+      "Bash(chmod 777 *)",
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Bash(dd if=*)",
+      "Bash(mkfs *)",
+      "Bash(> /dev/*)"
+    ]
+  }
+}

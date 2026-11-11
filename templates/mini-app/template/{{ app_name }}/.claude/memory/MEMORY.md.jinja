@@ -1,0 +1,42 @@
+# {{ app_name }} Memory
+
+## Platform Context
+This app was bootstrapped from `agentic-core` (Copier template + bootstrap script), by default the sibling folder `../agentic-core/`. For cross-cutting deployment and infrastructure lessons, see:
+- `../agentic-core/docs/lessons-mobile-deployment.md` — 22 hard-won lessons from prior apps
+- `../agentic-core/.claude/memory/` — Shared patterns, security, debugging, deployment
+
+## Known Gotchas (from prior apps)
+These issues hit multiple sibling apps. They're encoded in the template defaults, but worth knowing:
+
+### Deployment
+{% if deploy_target == 'render' -%}
+- **tsc errors block deploys** — `npm run build` runs `tsc && vite build`. Unused imports, unused params, and prop mismatches in ANY file (including tests) kill the Docker build. Run `cd frontend && npx tsc --noEmit` before every deploy.
+- **`render.yaml` is live infrastructure** — After the Blueprint is applied, a change merged to `main` syncs to the services. Keep `ipAllowList: []` on the database and never add a literal secret `value`. `tests/unit/test_render_blueprint.py` guards both.
+- **Render passes every service env var to the Docker build** — Never add CLI-only secrets to `render.yaml`. Declare `ARG` only for `VITE_*`, and only in the Node stage.
+- **CORS_ORIGINS** — Leave it unset on Render. The app then allows only `RENDER_EXTERNAL_URL`.
+{%- else -%}
+- **tsc errors block Railway deploys** — `npm run build` runs `tsc && vite build`. Unused imports, unused params, and prop mismatches in ANY file (including tests) kill the Docker build. Run `cd frontend && npx tsc --noEmit` before every deploy.
+- **VITE_* vars are build-time** — Must be set as Railway env vars BEFORE deploying. They're baked into the JS bundle via Dockerfile ARGs.
+- **Railway CVE scanner** — Blocks deploys for ANY vulnerable package in the lockfile, even transitive dev deps. Fix with `pnpm.overrides` (or `overrides`) in root `package.json`.
+- **CORS_ORIGINS** — Must include your Railway domain. Set after first deploy (domain isn't known beforehand).
+{%- endif %}
+
+### Backend
+- **Eager loading** — Every query feeding a `*_to_response()` MUST use `selectinload()` for all relationships. Missing loads = empty arrays, no error.
+- **Config** — All settings via `app.config.settings`. Never read `os.environ` directly (breaks testability).
+- **Timezone** — Frontend sends `X-Timezone` header. Backend stores in UserProfile. All date logic uses user's timezone, never UTC.
+
+{% if auth_provider == 'google' %}### Auth (Google sign-in)
+- **Server-side sign-in** — The backend runs the Google OpenID Connect flow and sets a signed, HttpOnly session cookie. The browser never holds a Google token.
+- **Agents use agent keys** — Never accept a Google token as a machine credential. See `AGENT_CREDENTIALS` in the README.
+- **Locked until configured** — Protected routes return 503 `auth_not_configured` until the Google settings are set.
+{% else %}### Auth (Logto)
+- **ES384 signing** — Logto uses ES384 (EC P-384), not RS256. JWKS validation configured for this.
+- **SPA auth guard** — Uses `useRef(wasAuthenticated)` to prevent redirect loops during Logto's async callback.
+- **Two+ Logto apps** — Traditional Web (backend) + SPA (frontend) + optionally Native (mobile) + M2M (agents). All created by bootstrap.
+{% endif %}
+## Architecture Decisions
+<!-- Record key decisions made during development -->
+
+## Debugging Notes
+<!-- Record solutions to recurring issues -->

@@ -1,0 +1,35 @@
+"""User identity dependencies for route injection."""
+
+import zoneinfo
+
+from fastapi import Depends, Header
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth.middleware import get_current_user_id
+from app.db.engine import get_db
+from app.db.models import UserProfile
+from app.services.user_profile_service import get_or_create_profile
+
+
+def _is_valid_timezone(tz: str) -> bool:
+    """Check if a timezone string is a valid IANA timezone."""
+    try:
+        zoneinfo.ZoneInfo(tz)
+        return True
+    except (KeyError, zoneinfo.ZoneInfoNotFoundError):
+        return False
+
+
+async def get_or_create_user_profile(
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+    x_timezone: str | None = Header(None),
+) -> UserProfile:
+    """Ensure a UserProfile exists for the current user.
+
+    On first login, creates a profile with the browser's timezone (or UTC).
+    On subsequent requests, auto-updates timezone only if the profile still
+    has the "UTC" default (write-once behavior).
+    """
+    browser_tz = x_timezone if x_timezone and _is_valid_timezone(x_timezone) else None
+    return await get_or_create_profile(db, user_id, default_timezone=browser_tz)

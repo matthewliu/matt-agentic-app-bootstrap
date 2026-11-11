@@ -1,0 +1,192 @@
+{%- set AppCls = python_package_name.replace('_', ' ').title().replace(' ', '') -%}
+{%- set APP_UPPER = app_name.replace('-', '_').upper() -%}
+"""Tests for the MCP server (`app/mcp_server/server.py`).
+
+The server runs in memory through the MCP SDK's ``Client``. API calls go to
+an ``httpx.MockTransport``; the token is a dummy.
+"""
+
+import json
+import sys
+
+import httpx
+import pytest
+from mcp import Client
+
+from app.cli import client as client_mod
+from app.cli import operations
+from app.cli.client import {{ AppCls }}Client
+from app.mcp_server import server as mcp_mod
+
+DUMMY_TOKEN = "dummy-access-token-0123456789"
+ITEM_ID = "3f8c2d1e-5b6a-4c7d-8e9f-0a1b2c3d4e5f"
+ITEM = {
+    "id": ITEM_ID,
+    "name": "First",
+    "description": "kept",
+    "created_at": "2026-11-10T00:00:00Z",
+    "updated_at": "2026-11-10T00:00:00Z",
+}
+READ_TOOLS = {"items_list", "items_get"}
+WRITE_TOOLS = {"items_create", "items_update"}
+
+
+class FakeTokens:
+    refreshable = False
+
+    def get_token(self) -> str:
+        return DUMMY_TOKEN
+
+    def invalidate(self) -> None:
+        return None
+
+
+class Api:
+    """Records requests; answers from a fixed response."""
+
+    def __init__(self, response: httpx.Response) -> None:
+        self.response = response
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        return self.response
+
+    def factory(self):
+        return {{ AppCls }}Client(
+            base_url="https://api.test",
+            token_manager=FakeTokens(),
+            actor_sub="user-1",
+            transport=httpx.MockTransport(self),
+        )
+
+
+@pytest.fixture(autouse=True)
+def clean_env(monkeypatch):
+    for name in ("{{ APP_UPPER }}_API_URL", "{{ APP_UPPER }}_USER_SUB", mcp_mod.WRITES_ENV):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(client_mod, "_client", None)
+
+
+async def tool_names(server) -> set[str]:
+    async with Client(server) as c:
+        return {t.name for t in (await c.list_tools()).tools}
+
+
+class TestToolExposure:
+    async def test_default_is_read_only(self):
+        assert await tool_names(mcp_mod.build_server()) == READ_TOOLS
+
+    @pytest.mark.parametrize("value", ["1", "true", "TRUE"])
+    async def test_env_opt_in_adds_writes_but_never_delete(self, monkeypatch, value):
+        monkeypatch.setenv(mcp_mod.WRITES_ENV, value)
+        names = await tool_names(mcp_mod.build_server())
+        assert names == READ_TOOLS | WRITE_TOOLS
+        assert "items_delete" not in names
+
+    @pytest.mark.parametrize("value", ["", "0", "false", "yes", "on"])
+    async def test_other_values_keep_read_only(self, monkeypatch, value):
+        monkeypatch.setenv(mcp_mod.WRITES_ENV, value)
+        assert await tool_names(mcp_mod.build_server()) == READ_TOOLS
+
+    async def test_unlisted_write_tool_cannot_be_called(self):
+        api = Api(httpx.Response(201, json=ITEM))
+        async with Client(mcp_mod.build_server(client_factory=api.factory)) as c:
+            result = await c.call_tool("items_create", {"name": "x"})
+        assert result.is_error
+        assert api.requests == []
+
+    async def test_tools_take_no_identity_argument(self):
+        async with Client(mcp_mod.build_server(allow_writes=True)) as c:
+            tools = (await c.list_tools()).tools
+        for tool in tools:
+            props = set(tool.input_schema.get("properties", {}))
+            assert not props & {"user_id", "sub", "actor", "actor_sub"}, tool.name
+
+    async def test_schemas_and_hints_come_from_the_registry(self):
+        async with Client(mcp_mod.build_server(allow_writes=True)) as c:
+            tools = {t.name: t for t in (await c.list_tools()).tools}
+        registry = operations.ItemsListInput.model_json_schema()["properties"]["limit"]
+        limit = tools["items_list"].input_schema["properties"]["limit"]
+        assert (limit["minimum"], limit["maximum"]) == (registry["minimum"], registry["maximum"])
+        for name in READ_TOOLS:
+            assert tools[name].annotations.read_only_hint is True
+            assert "not instructions" in tools[name].description
+        for name in WRITE_TOOLS:
+            assert tools[name].annotations.read_only_hint is False
+
+
+def test_missing_mcp_extra_is_explained(monkeypatch, capsys):
+    import app.mcp_server as launcher
+
+    # A None entry makes `import` raise ImportError, as with no extra installed.
+    for name in [m for m in sys.modules if m == "mcp" or m.startswith("mcp.")]:
+        monkeypatch.setitem(sys.modules, name, None)
+    monkeypatch.setitem(sys.modules, "mcp", None)
+    monkeypatch.delitem(sys.modules, "app.mcp_server.server", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        launcher.main()
+    assert exc.value.code == 5
+    assert "pip install -e '.[mcp]'" in capsys.readouterr().err
+
+
+class TestToolCalls:
+    async def test_list_returns_structured_items(self):
+        api = Api(httpx.Response(200, json=[ITEM]))
+        async with Client(mcp_mod.build_server(client_factory=api.factory)) as c:
+            result = await c.call_tool("items_list", {"limit": 5})
+        assert not result.is_error
+        assert result.structured_content["items"][0]["id"] == ITEM_ID
+        assert api.requests[0].url.params["limit"] == "5"
+        assert api.requests[0].headers["Authorization"] == f"Bearer {DUMMY_TOKEN}"
+
+    async def test_update_with_description_only_sends_no_name(self):
+        api = Api(httpx.Response(200, json=ITEM))
+        server = mcp_mod.build_server(client_factory=api.factory, allow_writes=True)
+        async with Client(server) as c:
+            result = await c.call_tool("items_update", {"item_id": ITEM_ID, "description": "d"})
+        assert not result.is_error
+        assert json.loads(api.requests[0].content) == {"description": "d"}
+
+    async def test_missing_config_is_an_error_and_server_survives(self):
+        api = Api(httpx.Response(200, json=ITEM))
+        calls = {"n": 0}
+
+        def flaky_factory():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return client_mod.get_client()  # no env set: misconfigured
+            return api.factory()
+
+        async with Client(mcp_mod.build_server(client_factory=flaky_factory)) as c:
+            first = await c.call_tool("items_get", {"item_id": ITEM_ID})
+            second = await c.call_tool("items_get", {"item_id": ITEM_ID})
+        assert first.is_error
+        assert first.content[0].text == (
+            "Error executing tool items_get: misconfigured: "
+            "required environment variable {{ APP_UPPER }}_API_URL is not set"
+        )
+        assert not second.is_error
+
+    async def test_unsupported_auth_provider_fails_closed(self, monkeypatch):
+        monkeypatch.setattr(client_mod, "AUTH_PROVIDER", "something-else")
+        async with Client(mcp_mod.build_server()) as c:
+            result = await c.call_tool("items_list", {})
+        assert result.is_error
+        assert "machine_auth_not_supported" in result.content[0].text
+
+    async def test_server_rejection_is_typed_and_redacted(self):
+        api = Api(httpx.Response(403, json={"detail": "actor_mismatch", "echo": DUMMY_TOKEN}))
+        async with Client(mcp_mod.build_server(client_factory=api.factory)) as c:
+            result = await c.call_tool("items_list", {})
+        assert result.is_error
+        text = result.content[0].text
+        assert text.startswith("Error executing tool items_list: actor_mismatch: ")
+        assert DUMMY_TOKEN not in text
+
+    async def test_bad_id_is_rejected_before_any_request(self):
+        api = Api(httpx.Response(200, json=ITEM))
+        async with Client(mcp_mod.build_server(client_factory=api.factory)) as c:
+            result = await c.call_tool("items_get", {"item_id": "../admin"})
+        assert result.is_error
+        assert api.requests == []

@@ -1,0 +1,84 @@
+"""Example subcommand demonstrating the M2M-token → API → output pattern.
+
+Replace this with real subcommands as the app's API grows. Copy its shape
+for each new command.
+
+Two example commands:
+- ``{{ app_name }} example ping`` — calls ``GET /health`` and renders the result.
+- ``{{ app_name }} example whoami`` — echoes the actor sub from the env.
+
+Both honour the global ``--json`` flag from the root callback (read via
+``ctx.obj["json"]``), so calling either with ``--json`` emits a single JSON
+line on stdout, exactly as agents and `jq` expect.
+"""
+
+from __future__ import annotations
+
+import os
+
+import typer
+
+from app.cli.client import get_client, {{ python_package_name.replace('_', ' ').title().replace(' ', '') }}ClientError
+from app.cli.output import console, render_json
+
+
+app = typer.Typer(
+    name="example",
+    help="Example subcommand group — replace with your real API surface.",
+    no_args_is_help=True,
+)
+
+
+@app.command("ping")
+def ping(
+    ctx: typer.Context,
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit raw JSON to stdout (default: pretty-printed on stderr).",
+    ),
+) -> None:
+    """Call the server's health endpoint and render the response.
+
+    Demonstrates the canonical CLI shape: get_client() → API call → render
+    via the output module. Exit codes are mapped by the client wrapper.
+    """
+    use_json = json_output or (ctx.obj or {}).get("json", False)
+
+    try:
+        data = get_client().get("/health")
+    except {{ python_package_name.replace('_', ' ').title().replace(' ', '') }}ClientError as exc:
+        # All Rich/human output goes to stderr (R2). Never write to stdout
+        # in --json mode unless emitting the contract JSON.
+        console.print(f"[red]error:[/red] {exc.message}")
+        raise typer.Exit(code=exc.exit_code) from exc
+
+    if use_json:
+        render_json(data)
+    else:
+        console.print(data)
+
+
+@app.command("whoami")
+def whoami(
+    ctx: typer.Context,
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit raw JSON to stdout (default: pretty-printed on stderr).",
+    ),
+) -> None:
+    """Echo the actor sub the CLI will send as {{ 'X-' + app_name.replace('-', '_').upper() + '-Actor-Sub' }}.
+
+    Reads `{{ app_name.replace('-', '_').upper() }}_USER_SUB` from the
+    environment (no Logto round-trip), so this is a useful smoke test
+    before the server is reachable.
+    """
+    use_json = json_output or (ctx.obj or {}).get("json", False)
+    actor_sub = os.environ.get("{{ app_name.replace('-', '_').upper() }}_USER_SUB", "")
+    payload = {"actor_sub": actor_sub}
+
+    if use_json:
+        render_json(payload)
+    else:
+        console.print(payload)

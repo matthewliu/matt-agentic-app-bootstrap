@@ -1,0 +1,64 @@
+# {{ app_name }} design
+
+This file holds the visual rules for {{ app_name }}. It is a starting point. Replace it when you choose your own visual direction.
+
+## Where the visual language lives
+
+`frontend/src/design/tokens.ts` is the one source for:
+
+- Colors for light mode and dark mode
+- Fonts
+- Spacing
+- Corner radii
+- Shadows
+- Motion (durations and easing)
+- Breakpoints and the content width
+
+To change the look, edit `tokens.ts`. `frontend/tailwind.config.ts` reads it and creates the CSS variables and Tailwind classes. Do not put design values in `tailwind.config.ts` or `index.css`.
+
+If you change a font, also change `fontStylesheet` in the same file. It is the URL that loads the web fonts. `vite.config.ts` adds it to the page.
+
+## Rules for components
+
+- Use token classes: `bg-bg-primary`, `bg-bg-secondary`, `text-text-primary`, `text-text-muted`, `border-border-subtle`, `bg-accent`, `text-accent-contrast`.
+- Do not write hex colors, pixel sizes, or shadow values in a component.
+- Use the named spacing steps (`p-md`, `gap-sm`, `mt-xl`). Tailwind's numeric steps (`p-4`) also work.
+- Keep body text at 4.5:1 contrast or more against its background, in both themes. Check both themes after you change a color.
+- Keep the visible focus outline. The base style draws it with the `focus` color.
+- People who turn on "reduce motion" get almost no animation. Do not depend on an animation to show state.
+
+## Light mode and dark mode
+
+- The app follows the operating system setting (`prefers-color-scheme`) by default.
+- A person can choose light or dark. `src/theme.ts` saves the choice in the browser and sets `data-theme` on `<html>`. A manual choice overrides the system setting.
+- `src/components/ThemeToggle.tsx` cycles system, light, and dark. Put it in the header.
+- A short script in `index.html` applies the saved choice before the first paint. This prevents a flash of the wrong theme.
+
+Each color in `tokens.ts` has a light value and a dark value. When you add a color, add both.
+
+## Responsive layout
+
+Design for a phone first. Then add rules for larger screens.
+
+| Name | Minimum width | Tailwind prefix |
+| --- | --- | --- |
+| phone | 0 px | none |
+| tablet | 640 px | `tablet:` |
+| desktop | 1024 px | `desktop:` |
+| wide | 1280 px | `wide:` |
+
+- Write the phone style with no prefix: `px-md tablet:px-lg desktop:px-xl`.
+- Use `max-w-content mx-auto` for the main column.
+- Check every page at 375 px wide. No page may scroll sideways.
+- Make main tap targets 44 px high on a phone. Never make a tap target smaller than 24 px.
+
+The older Tailwind prefixes `sm:`, `lg:`, and `xl:` use the same widths. Use the named prefixes in new code.
+
+## Your own visual direction
+
+These tokens are neutral defaults. They are not a brand. To choose a visual direction, use the `/impeccable` skill:
+
+1. Ask for two or three small visual directions with the same content.
+2. Choose one. Check it on a phone and on a desktop.
+3. Put the chosen values in `tokens.ts`.
+4. Record the decisions and the reasons in this file.

@@ -1,0 +1,100 @@
+"""{{ app_name }} — {{ app_description }}"""
+
+from contextlib import asynccontextmanager
+{% if include_frontend %}
+from pathlib import Path
+{% endif %}
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+{% if auth_provider == 'google' %}from starlette.middleware.sessions import SessionMiddleware
+{% endif %}{% if include_frontend %}
+from fastapi.staticfiles import StaticFiles
+{% endif %}
+
+{% if auth_provider == 'google' %}from app.auth.middleware import session_middleware_kwargs
+{% endif %}from app.config import settings
+from app.db.engine import engine
+{% if auth_provider == 'google' %}from app.routes import auth, health, items
+{% else %}from app.routes import health, items
+{% endif %}
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup/shutdown lifecycle for the application."""
+    import os
+
+    if os.environ.get("AUTO_CREATE_TABLES", "").lower() in ("1", "true"):
+        # Dev convenience: auto-create tables. Use Alembic for production migrations.
+        from app.db.models import Base
+
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    yield
+    # Shutdown: dispose the engine
+    await engine.dispose()
+
+
+app = FastAPI(
+    title="{{ app_name }}",
+    description="{{ app_description }}",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins_list,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Timezone",
+{% if auth_provider == 'google' %}        # Browser writes send the session's CSRF token (app/auth/middleware.py).
+        "X-CSRF-Token",
+{% endif %}        # M2M actor delegation (app/cli/). Browsers never send this, but a
+        # missing entry makes the preflight fail for any non-browser caller
+        # that triggers one.
+        "X-{{ app_name | replace('-', '_') | upper }}-Actor-Sub",
+    ],
+)
+{% if auth_provider == 'google' %}
+# Signed, HttpOnly session cookie for Google sign-in. It holds the user ID,
+# email, sign-in time, and CSRF token, and never a Google token.
+app.add_middleware(SessionMiddleware, **session_middleware_kwargs())
+{% endif %}
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    """Return sanitized 500 errors — never expose stack traces or ORM details."""
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+# Routers
+app.include_router(health.router)
+{% if auth_provider == 'google' %}app.include_router(auth.router)
+{% endif %}app.include_router(items.router, prefix="/api")
+{% if include_frontend %}
+
+# WARNING: All API routers must be included BEFORE this catch-all.
+# Routes registered after this point will be silently shadowed.
+_frontend_dist = Path("frontend/dist")
+if _frontend_dist.is_dir():
+    from fastapi.responses import FileResponse
+
+    _assets_dir = _frontend_dist / "assets"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="static-assets")
+
+    _frontend_root = _frontend_dist.resolve()
+
+    @app.get("/{path:path}")
+    async def serve_spa(path: str):
+        """Serve index.html for all non-API routes (SPA client-side routing)."""
+        file_path = (_frontend_dist / path).resolve()
+        if file_path.is_relative_to(_frontend_root) and file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(_frontend_root / "index.html")
+{% endif %}

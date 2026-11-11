@@ -1,0 +1,42 @@
+import { LogtoConfig } from "@logto/react";
+
+const LOGTO_API_RESOURCE = import.meta.env.VITE_LOGTO_API_RESOURCE || "";
+
+/**
+ * Logto config, or the names of the build-time vars that are missing.
+ *
+ * A deploy without a Logto app (e.g. a Render deploy before auth is set up)
+ * is a normal state, not a crash: `App` renders a "not configured" panel and
+ * the backend returns 503 `auth_not_configured` on every protected route.
+ */
+export type LogtoConfigResult =
+  | { configured: true; config: LogtoConfig }
+  | { configured: false; missing: string[] };
+
+export function getLogtoConfig(): LogtoConfigResult {
+  const endpoint = import.meta.env.VITE_LOGTO_ENDPOINT;
+  const appId = import.meta.env.VITE_LOGTO_APP_ID;
+
+  if (!endpoint || !appId) {
+    const missing: string[] = [];
+    if (!endpoint) missing.push("VITE_LOGTO_ENDPOINT");
+    if (!appId) missing.push("VITE_LOGTO_APP_ID");
+    return { configured: false, missing };
+  }
+
+  return {
+    configured: true,
+    config: {
+      endpoint,
+      appId,
+      resources: LOGTO_API_RESOURCE ? [LOGTO_API_RESOURCE] : [],
+      // These must be scope names that exist on the Logto API resource.
+      // agentic_core.bootstrap.logto.create_scopes provisions exactly
+      // `read` and `write`; requesting anything else yields a token
+      // without it and the backend 403s on missing_scope.
+      scopes: ["read", "write"],
+    },
+  };
+}
+
+export { LOGTO_API_RESOURCE };

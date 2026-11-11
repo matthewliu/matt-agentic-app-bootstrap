@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+.venv/
+.env
+
+# Claude Code local files (session-scoped, do not commit)
+.claude/settings.local.json
+.claude/ralph-loop.*.local.md
+specs/*/verify-logs/
+
+# Compound Engineering machine-local config
+.compound-engineering/*.local.yaml

@@ -1,0 +1,33 @@
+"""Pydantic models for user profile request/response validation."""
+
+import datetime
+import zoneinfo
+
+from pydantic import BaseModel, Field, field_validator
+
+
+class UserProfileUpdate(BaseModel):
+    """Request body for updating user profile."""
+
+    timezone: str | None = Field(None, max_length=50)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: str | None) -> str | None:
+        if v is not None:
+            try:
+                zoneinfo.ZoneInfo(v)
+            except (zoneinfo.ZoneInfoNotFoundError, KeyError):
+                raise ValueError(f"Invalid timezone: {v!r}") from None
+        return v
+
+
+class UserProfileResponse(BaseModel):
+    """Response body for user profile."""
+
+    user_id: str
+    timezone: str
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+
+    model_config = {"from_attributes": True}

@@ -1,0 +1,100 @@
+/**
+ * Browser session for Google sign-in.
+ *
+ * The backend does the whole OpenID Connect flow and keeps an HttpOnly
+ * session cookie. This module only asks GET /auth/session who is signed in.
+ * It never sees or stores a Google token, and it stores nothing in
+ * localStorage or sessionStorage. The CSRF token lives in memory only.
+ */
+
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import type { ReactNode } from "react";
+
+export type AuthStatus = "loading" | "signed_in" | "signed_out" | "not_configured" | "error";
+
+export type AuthState = {
+  status: AuthStatus;
+  userId?: string;
+  email?: string;
+  csrfToken?: string;
+  /** A sign-in error code from the backend, e.g. not_allowed. */
+  error?: string;
+};
+
+type AuthContextValue = AuthState & {
+  refresh: () => Promise<void>;
+  signOut: () => Promise<boolean>;
+};
+
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+export async function fetchSession(): Promise<AuthState> {
+  try {
+    const response = await fetch("/auth/session", { credentials: "same-origin" });
+    if (response.status === 200) {
+      const body = await response.json();
+      return {
+        status: "signed_in",
+        userId: body.user_id,
+        email: body.email,
+        csrfToken: body.csrf_token,
+      };
+    }
+    if (response.status === 401) return { status: "signed_out" };
+    if (response.status === 403) {
+      const body = await response.json().catch(() => ({}));
+      return { status: "signed_out", error: body?.detail === "not_allowed" ? "not_allowed" : undefined };
+    }
+    if (response.status === 503) return { status: "not_configured" };
+    return { status: "error" };
+  } catch {
+    return { status: "error" };
+  }
+}
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [state, setState] = useState<AuthState>({ status: "loading" });
+
+  const refresh = useCallback(async () => {
+    setState(await fetchSession());
+  }, []);
+
+  /** Resolves true only when the backend ended the session. */
+  const signOut = useCallback(async (): Promise<boolean> => {
+    try {
+      const response = await fetch("/auth/logout", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: state.csrfToken ? { "X-CSRF-Token": state.csrfToken } : {},
+      });
+      if (response.status === 204) {
+        setState({ status: "signed_out" });
+        return true;
+      }
+    } catch {
+      // Network failure: fall through and ask the backend again.
+    }
+    // The session may still be active. Show what the backend says now.
+    setState(await fetchSession());
+    return false;
+  }, [state.csrfToken]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return (
+    <AuthContext.Provider value={{ ...state, refresh, signOut }}>{children}</AuthContext.Provider>
+  );
+}
+
+export function useAuth(): AuthContextValue {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used inside AuthProvider");
+  return ctx;
+}
+
+/** Start Google sign-in. The backend checks `next` again. */
+export function startSignIn(next = "/") {
+  window.location.assign(`/auth/login?next=${encodeURIComponent(next)}`);
+}

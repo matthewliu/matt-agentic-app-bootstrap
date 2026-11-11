@@ -1,0 +1,747 @@
+"""HTTP client + machine credentials for the `{{ app_name }}` CLI and MCP server.
+
+Keeps the HTTP client and the credential code in one module. The CLI
+(`app/cli/`) and the MCP server (`app/mcp_server/`)
+both use this one client, so both reach the app only through its HTTP API.
+
+- ``{{ AppCls }}Client`` — httpx wrapper with Bearer-token + actor-sub header
+  injection and exit-code mapping (0/1/2/3/4/5 per spec §B2).
+- ``TokenProvider`` — the auth seam. The client needs only ``get_token()``
+  and ``invalidate()``. Which provider is used follows ``AUTH_PROVIDER``:
+  ``logto`` -> ``LogtoM2MTokenManager``; ``google`` -> ``AgentKeyTokenProvider``
+  (an app-scoped agent key, see docs/agent-auth-contract.md in
+  agentic-core). A Google sign-in token is never a machine credential.
+- ``LogtoM2MTokenManager`` — caches Logto access tokens to disk
+  (~/.cache/{{ app_name }}/token.json, mode 0600, atomic write), refreshes
+  60s before expiry. PER PERF-005, the read/refresh/write cycle is wrapped
+  in a ``FileLock`` so concurrent CLI invocations can't all mint at once
+  (mint-storm guard against Logto rate limits).
+
+Exit-code contract:
+    2 — authentication failed (401 even after refresh; bad M2M creds)
+    3 — application/server error (4xx other than 401, 5xx, malformed response)
+    4 — network unreachable (connect/timeout)
+    5 — misconfig (required env var missing or malformed; unsupported auth)
+
+Every ``{{ AppCls }}ClientError`` also carries ``error_code``, a stable
+snake_case string. When the server answers with a snake_case ``detail``
+(for example ``auth_not_configured`` or ``actor_mismatch``), that string is
+the code. Error messages never contain a token, a secret, or an agent key.
+
+Module-level ``get_client()`` is the public factory: lazy singleton wired
+from environment variables. Tests should monkeypatch the caller module's
+``get_client`` attribute (or this module's ``_client`` singleton) rather
+than constructing the client directly.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import stat
+import sys
+import tempfile
+import time
+from pathlib import Path
+from typing import Any, NoReturn, Protocol
+
+import httpx
+from filelock import FileLock, Timeout
+
+{% set AppCls = python_package_name.replace('_', ' ').title().replace(' ', '') %}
+{% set APP_UPPER = app_name.replace('-', '_').upper() %}
+{% set HEADER_NAME = 'X-' + app_name.replace('-', '_').upper() + '-Actor-Sub' %}
+
+# Refresh the cached token this many seconds before it actually expires.
+REFRESH_LEEWAY_SECONDS = 60
+
+# Token cache lives in the user cache dir, scoped per-app slug so multiple
+# generated apps on the same machine never collide. Mode 0600, atomic write.
+DEFAULT_CACHE_PATH = Path.home() / ".cache" / "{{ app_name }}" / "token.json"
+
+# Default HTTP timeout for Logto + API requests (connect + read).
+DEFAULT_TIMEOUT_SECONDS = 10.0
+
+# Default per-page size for paginated requests; APIs typically cap at 100.
+DEFAULT_PAGE_SIZE = 50
+
+# Hard safety cap on auto-pagination — refuse runaway response shapes.
+MAX_PAGINATION_PAGES = 1000
+
+# Truncate upstream error bodies to keep stderr legible.
+_BODY_TRUNCATE = 200
+
+# Which machine credential this app uses. Rendered from the `auth_provider`
+# Copier answer; apps without that answer are Logto apps.
+AUTH_PROVIDER = "{{ auth_provider | default('logto') }}"
+
+# Agent key shape for Google-mode apps: agk.<key_id>.<secret>, where the
+# secret is 32 random bytes in URL-safe base64 without padding. Always use
+# fullmatch: `$` in re.match also accepts a trailing newline. `.sub` with the
+# same pattern redacts any agent key that a server error body reflects.
+AGENT_KEY_RE = re.compile(r"agk\.[a-z0-9][a-z0-9-]{0,31}\.[A-Za-z0-9_-]{43}")
+
+# Google-mode actor: the user ID the server binds an agent key to.
+GOOGLE_ACTOR_RE = re.compile(r"google:[A-Za-z0-9_-]{1,255}")
+
+# Any actor must be printable ASCII: httpx sends header values as ASCII.
+_ACTOR_RE = re.compile(r"[\x21-\x7e]{1,255}")
+
+# A server `detail` string becomes `error_code` only when it fully has this shape,
+# so free-form upstream text never leaks into the typed code.
+_DETAIL_CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+_STATUS_ERROR_CODES = {
+    400: "bad_request",
+    401: "auth_failed",
+    403: "forbidden",
+    404: "not_found",
+    409: "conflict",
+    422: "validation_error",
+}
+
+
+class {{ AppCls }}ClientError(Exception):
+    """Raised on API failure. ``exit_code`` maps to CLI process exit code.
+
+    ``error_code`` is the stable machine-readable reason (see module docstring).
+    """
+
+    def __init__(
+        self,
+        exit_code: int,
+        message: str,
+        status_code: int | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+        self.message = message
+        self.status_code = status_code
+        self.error_code = error_code or _default_error_code(exit_code, status_code)
+
+
+def _default_error_code(exit_code: int, status_code: int | None) -> str:
+    if status_code is not None:
+        if status_code in _STATUS_ERROR_CODES:
+            return _STATUS_ERROR_CODES[status_code]
+        return "server_error" if status_code >= 500 else "client_error"
+    return {2: "auth_failed", 4: "network_error", 5: "misconfigured"}.get(exit_code, "error")
+
+
+class TokenProvider(Protocol):
+    """What the client needs from a machine credential.
+
+    ``refreshable`` says whether ``invalidate()`` followed by ``get_token()``
+    can return a different credential. The client retries a 401 once only
+    when it can.
+    """
+
+    refreshable: bool
+
+    def get_token(self) -> str: ...
+
+    def invalidate(self) -> None: ...
+
+
+class AgentKeyTokenProvider:
+    """Static app agent key for Google-mode apps (no token exchange).
+
+    The server stores only a hash of the key and binds it to one actor and
+    a scope set. See the auth contract for the server-side rules.
+    """
+
+    refreshable = False
+
+    def __init__(self, agent_key: str, source: str = "{{ APP_UPPER }}_AGENT_KEY") -> None:
+        if not AGENT_KEY_RE.fullmatch(agent_key):
+            # Never echo the value: a near-miss may still be a real secret.
+            raise {{ AppCls }}ClientError(
+                exit_code=5,
+                message=f"{source} does not hold an agent key (expected agk.<key_id>.<secret>)",
+                error_code="misconfigured",
+            )
+        self._agent_key = agent_key
+
+    def get_token(self) -> str:
+        return self._agent_key
+
+    def invalidate(self) -> None:
+        return None
+
+    def __repr__(self) -> str:
+        return "AgentKeyTokenProvider(<redacted>)"
+
+
+# ---------------------------------------------------------------------------
+# Logto M2M token manager (with a PERF-005 file lock)
+# ---------------------------------------------------------------------------
+
+
+class LogtoM2MTokenManager:
+    """Fetch + cache Logto M2M tokens with auto-refresh.
+
+    Cache JSON shape: ``{"access_token": "<jwt>", "exp": <unix_ts>}``.
+    Cache perms: 0600 (enforced via ``os.fchmod`` pre-rename + ``os.chmod``
+    post-rename — belt-and-suspenders against umask interference).
+
+    PERF-005: All cache reads + writes happen inside a ``FileLock`` so that
+    if two CLI invocations race for a refresh, only one mints from Logto;
+    the other waits, then reads the freshly-written cache. The lock file is
+    ``<cache_path>.lock`` and is acquired BEFORE the freshness check (the
+    losing racer mustn't fetch its own copy of the same token).
+
+    Failures raise ``{{ AppCls }}ClientError`` (never ``SystemExit``) so a
+    long-running caller such as the MCP server survives them.
+    """
+
+    refreshable = True
+
+    def __init__(
+        self,
+        endpoint: str,
+        app_id: str,
+        app_secret: str,
+        resource: str,
+        scopes: list[str],
+        cache_path: Path | None = None,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        lock_timeout: float = 30.0,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        self.transport = transport
+        self.endpoint = endpoint.rstrip("/")
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.resource = resource
+        self.scopes = list(scopes)
+        self._cache_path = cache_path
+        self.timeout = timeout
+        self.lock_timeout = lock_timeout
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def get_token(self) -> str:
+        """Return a valid JWT — cached if fresh, else fetched from Logto.
+
+        The whole check-then-fetch path is guarded by a FileLock so concurrent
+        CLI processes don't all hammer Logto at once (mint-storm). The lock
+        timeout matches the HTTP timeout so a hung peer doesn't block forever.
+        """
+        cache_path = self._cache_file()
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = str(cache_path) + ".lock"
+
+        try:
+            with FileLock(lock_path, timeout=self.lock_timeout):
+                cached = self._read_cache_safe()
+                if (
+                    cached is not None
+                    and cached["exp"] > time.time() + REFRESH_LEEWAY_SECONDS
+                ):
+                    return cached["access_token"]
+
+                # Need a fresh token — try Logto.
+                token, exp = self._fetch_or_fallback(cached)
+                self._write_cache_atomic(token, exp)
+                return token
+        except Timeout as exc:
+            raise {{ AppCls }}ClientError(
+                exit_code=4,
+                message=f"timed out waiting for token-cache lock {lock_path}",
+                error_code="token_cache_locked",
+            ) from exc
+
+    def invalidate(self) -> None:
+        """Delete the cache. Forces next get_token() to refresh."""
+        path = self._cache_file()
+        lock_path = str(path) + ".lock"
+        try:
+            with FileLock(lock_path, timeout=self.lock_timeout):
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
+        except Timeout:
+            # If we can't acquire the lock just to delete, unlink anyway —
+            # the next get_token() will re-mint regardless.
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _cache_file(self) -> Path:
+        # Re-read DEFAULT_CACHE_PATH every call so test monkeypatching works
+        # even when the manager was constructed before the patch.
+        return self._cache_path if self._cache_path is not None else DEFAULT_CACHE_PATH
+
+    def _read_cache_safe(self) -> dict | None:
+        path = self._cache_file()
+        if not path.exists():
+            return None
+
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+
+        # On POSIX, refuse if group or world bits are set.
+        if sys.platform != "win32":
+            mode = stat.S_IMODE(st.st_mode)
+            if mode & 0o077 != 0:
+                print(
+                    f"Warning: token cache {path} has unsafe perms 0o{mode:o} "
+                    "(expected 0o600) — refusing to use; will refetch",
+                    file=sys.stderr,
+                )
+                return None
+
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return None
+
+        if not isinstance(data, dict):
+            return None
+
+        token = data.get("access_token")
+        exp = data.get("exp")
+        if not isinstance(token, str) or not isinstance(exp, (int, float)):
+            return None
+
+        return {"access_token": token, "exp": float(exp)}
+
+    def _fetch_or_fallback(self, cached: dict | None) -> tuple[str, float]:
+        """Hit Logto; on outage with non-expired cache, fall back with a warning."""
+        try:
+            return self._fetch_from_logto()
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status == 401:
+                message = "Logto rejected M2M credentials (401)"
+            else:
+                message = f"Logto token endpoint returned HTTP {status}"
+            raise {{ AppCls }}ClientError(
+                exit_code=2, message=message, error_code="token_mint_failed"
+            ) from exc
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            if cached is not None and cached["exp"] > time.time():
+                print(
+                    "Warning: Logto unreachable; using cached token "
+                    f"(exp in {int(cached['exp'] - time.time())}s)",
+                    file=sys.stderr,
+                )
+                return cached["access_token"], cached["exp"]
+            raise {{ AppCls }}ClientError(
+                exit_code=4,
+                message=f"Logto unreachable and no usable cached token ({type(exc).__name__})",
+                error_code="network_error",
+            ) from exc
+
+    def _fetch_from_logto(self) -> tuple[str, float]:
+        """POST to {endpoint}/oidc/token; return (access_token, abs_exp_unix_ts)."""
+        url = f"{self.endpoint}/oidc/token"
+        form = {
+            "grant_type": "client_credentials",
+            "resource": self.resource,
+            "scope": " ".join(self.scopes),
+        }
+        with httpx.Client(timeout=self.timeout, transport=self.transport) as client:
+            response = client.post(
+                url,
+                data=form,
+                auth=(self.app_id, self.app_secret),  # HTTP Basic
+            )
+        response.raise_for_status()
+        try:
+            payload = response.json()
+            access_token = payload["access_token"]
+            expires_in = float(payload.get("expires_in", 3600))
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise {{ AppCls }}ClientError(
+                exit_code=2,
+                message="Logto token endpoint returned an unexpected response",
+                error_code="token_mint_failed",
+            ) from exc
+        if not isinstance(access_token, str) or not access_token:
+            raise {{ AppCls }}ClientError(
+                exit_code=2,
+                message="Logto token endpoint returned no access token",
+                error_code="token_mint_failed",
+            )
+        return access_token, time.time() + expires_in
+
+    def _write_cache_atomic(self, access_token: str, exp: float) -> None:
+        """Atomic cache write: mkstemp (0600) → fchmod → rename → chmod.
+
+        We never log the token itself anywhere.
+        """
+        path = self._cache_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".token.", suffix=".tmp", dir=str(path.parent)
+        )
+        try:
+            # Defensive: enforce 0o600 even if umask interfered with mkstemp.
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump({"access_token": access_token, "exp": exp}, f)
+            os.rename(tmp_path, path)
+            # Post-rename chmod is belt-and-suspenders for systems where
+            # mkstemp ignores explicit mode bits.
+            os.chmod(path, 0o600)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+            raise
+
+
+# ---------------------------------------------------------------------------
+# HTTP client wrapper
+# ---------------------------------------------------------------------------
+
+
+class {{ AppCls }}Client:
+    """httpx wrapper with Bearer + actor-sub injection and exit-code mapping.
+
+    Holds one persistent ``httpx.Client(base_url=..., timeout=30.0)`` for
+    connection pooling across many sequential requests within a single CLI
+    invocation.
+    """
+
+    # Must match ACTOR_SUB_HEADER in app/auth/middleware.py, which reads
+    # `x-<APP_UPPER>-actor-sub` (underscores kept; lookup ignores case).
+    ACTOR_SUB_HEADER = "{{ HEADER_NAME }}"
+
+    def __init__(
+        self,
+        base_url: str,
+        token_manager: TokenProvider,
+        actor_sub: str,
+        timeout: float = 30.0,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.token_manager = token_manager
+        self.actor_sub = actor_sub
+        # `transport` is a test seam (httpx.MockTransport or an in-process app).
+        self._http = httpx.Client(
+            base_url=self.base_url, timeout=timeout, transport=transport
+        )
+        # The credential sent on the latest request, kept only so a server
+        # error body that reflects it can be redacted before display.
+        self._last_token: str | None = None
+
+    # ------------------------------------------------------------------
+    # Public HTTP verbs
+    # ------------------------------------------------------------------
+
+    def get(self, path: str, params: dict | None = None) -> Any:
+        return self._request("GET", path, params=params)
+
+    def post(self, path: str, json: dict | None = None) -> Any:
+        return self._request("POST", path, json=json)
+
+    def put(self, path: str, json: dict | None = None) -> Any:
+        return self._request("PUT", path, json=json)
+
+    def delete(self, path: str) -> None:
+        self._request("DELETE", path)
+        return None
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _headers(self) -> dict[str, str]:
+        token = self.token_manager.get_token()
+        self._last_token = token
+        return {
+            "Authorization": f"Bearer {token}",
+            self.ACTOR_SUB_HEADER: self.actor_sub,
+        }
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        json: dict | None = None,
+        _retried_401: bool = False,
+    ) -> Any:
+        try:
+            response = self._http.request(
+                method,
+                path,
+                headers=self._headers(),
+                params=params,
+                json=json,
+            )
+        except httpx.TransportError as exc:
+            # The exception text can include the URL but never headers.
+            raise {{ AppCls }}ClientError(
+                exit_code=4,
+                message=f"connection failed: {type(exc).__name__}",
+                error_code="network_error",
+            ) from exc
+
+        if response.status_code == 401:
+            if _retried_401 or not getattr(self.token_manager, "refreshable", True):
+                raise {{ AppCls }}ClientError(
+                    exit_code=2,
+                    message="authentication failed",
+                    status_code=401,
+                    error_code=self._detail_code(response),
+                )
+            self.token_manager.invalidate()
+            return self._request(
+                method, path, params=params, json=json, _retried_401=True
+            )
+
+        return self._handle_response(response)
+
+    def _handle_response(self, response: httpx.Response) -> Any:
+        status = response.status_code
+
+        if status == 204:
+            return None
+
+        if 200 <= status < 300:
+            try:
+                return response.json()
+            except (ValueError, json.JSONDecodeError) as exc:
+                raise {{ AppCls }}ClientError(
+                    exit_code=3,
+                    message="unexpected response format (non-JSON body on 2xx)",
+                    status_code=status,
+                ) from exc
+
+        body = self._safe_body(response)
+        if 400 <= status < 500:
+            raise {{ AppCls }}ClientError(
+                exit_code=3,
+                message=f"{status}: {body}",
+                status_code=status,
+                error_code=self._detail_code(response),
+            )
+        if 500 <= status < 600:
+            raise {{ AppCls }}ClientError(
+                exit_code=3,
+                message=f"server error: {status}",
+                status_code=status,
+                error_code=self._detail_code(response),
+            )
+
+        raise {{ AppCls }}ClientError(
+            exit_code=3,
+            message=f"unexpected HTTP status: {status}",
+            status_code=status,
+        )
+
+    @staticmethod
+    def _detail_code(response: httpx.Response) -> str | None:
+        """Return the server's snake_case ``detail`` string, if it has one."""
+        try:
+            detail = response.json().get("detail")
+        except (ValueError, AttributeError):
+            return None
+        if isinstance(detail, str) and _DETAIL_CODE_RE.fullmatch(detail):
+            return detail
+        return None
+
+    def _redact(self, text: str) -> str:
+        """Remove the active credential (and any agent key) from ``text``."""
+        if self._last_token:
+            text = text.replace(self._last_token, "<redacted>")
+        return AGENT_KEY_RE.sub("<redacted>", text)
+
+    def _safe_body(self, response: httpx.Response) -> str:
+        """Error body for display: redacted first, then truncated, so a cut
+        never leaves part of a credential visible."""
+        try:
+            text = self._redact(response.text)
+        except Exception:
+            return "<unreadable body>"
+        if len(text) > _BODY_TRUNCATE:
+            return text[:_BODY_TRUNCATE] + "..."
+        return text
+
+
+# ---------------------------------------------------------------------------
+# Module-level factory (lazy singleton)
+# ---------------------------------------------------------------------------
+
+_client: {{ AppCls }}Client | None = None
+
+
+def _require_env(name: str) -> str:
+    val = os.environ.get(name)
+    if not val:
+        # Exit code 5 (misconfig) per spec §B2. Name the variable, never a value.
+        raise {{ AppCls }}ClientError(
+            exit_code=5,
+            message=f"required environment variable {name} is not set",
+            error_code="misconfigured",
+        )
+    return val
+
+
+def _load_agent_key() -> tuple[str, str]:
+    """Return ``(agent_key, source_setting)``, preferring {{ APP_UPPER }}_AGENT_KEY_FILE.
+
+    A key file keeps the key out of shells and model context. When the file
+    variable is set (even to an empty value), its failures are final: no
+    fallback to the inline {{ APP_UPPER }}_AGENT_KEY. Messages name the
+    variable and the reason, never the path or the content.
+    """
+    key_file = os.environ.get("{{ APP_UPPER }}_AGENT_KEY_FILE")
+    if key_file is None:
+        inline = os.environ.get("{{ APP_UPPER }}_AGENT_KEY")
+        if not inline:
+            raise {{ AppCls }}ClientError(
+                exit_code=5,
+                message=(
+                    "no agent key: set {{ APP_UPPER }}_AGENT_KEY_FILE (preferred) "
+                    "or {{ APP_UPPER }}_AGENT_KEY"
+                ),
+                error_code="misconfigured",
+            )
+        return inline, "{{ APP_UPPER }}_AGENT_KEY"
+
+    def _fail(reason: str) -> NoReturn:
+        # Never echo the setting: a key pasted by mistake would leak here.
+        raise {{ AppCls }}ClientError(
+            exit_code=5,
+            message=f"{{ APP_UPPER }}_AGENT_KEY_FILE: {reason}",
+            error_code="misconfigured",
+        )
+
+    if not key_file.strip():
+        _fail("is set but empty")
+    path = Path(key_file).expanduser()
+    try:
+        st = os.stat(path)
+    except OSError:
+        _fail("file not found or not readable")
+    if not stat.S_ISREG(st.st_mode):
+        _fail("not a regular file")
+    if sys.platform != "win32" and stat.S_IMODE(st.st_mode) & 0o077:
+        _fail("group or other users can read it (run: chmod 600 <file>)")
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        _fail("file not readable")
+    if content.endswith("\n"):
+        content = content[:-1]
+    return content, "{{ APP_UPPER }}_AGENT_KEY_FILE"
+
+
+def _require_http_url(name: str) -> str:
+    """Read ``name`` and require an absolute http(s) URL with a host."""
+    value = _require_env(name)
+    try:
+        url = httpx.URL(value)
+    except (httpx.InvalidURL, TypeError, ValueError):
+        url = None
+    if url is None or url.scheme not in ("http", "https") or not url.host:
+        raise {{ AppCls }}ClientError(
+            exit_code=5,
+            message=f"{name} must be an http:// or https:// URL with a host",
+            error_code="misconfigured",
+        )
+    return value
+
+
+def _require_actor(name: str) -> str:
+    """Read the actor and check its shape before it reaches a header."""
+    value = _require_env(name)
+    pattern = GOOGLE_ACTOR_RE if AUTH_PROVIDER == "google" else _ACTOR_RE
+    if not pattern.fullmatch(value):
+        expected = "google:<sub>" if AUTH_PROVIDER == "google" else "printable ASCII"
+        raise {{ AppCls }}ClientError(
+            exit_code=5,
+            message=f"{name} is not a valid actor (expected {expected})",
+            error_code="misconfigured",
+        )
+    return value
+
+
+def _build_client() -> {{ AppCls }}Client:
+    """Construct a ``{{ AppCls }}Client`` from environment variables.
+
+    Required env vars (also documented in ``agent_context.AUTH_INFO``):
+        {{ APP_UPPER }}_API_URL (http/https), {{ APP_UPPER }}_USER_SUB, and then
+        logto:  {{ APP_UPPER }}_LOGTO_ENDPOINT, {{ APP_UPPER }}_API_RESOURCE,
+                {{ APP_UPPER }}_M2M_APP_ID, {{ APP_UPPER }}_M2M_APP_SECRET
+                (optional {{ APP_UPPER }}_M2M_SCOPES, space-separated)
+        google: {{ APP_UPPER }}_AGENT_KEY_FILE (preferred) or {{ APP_UPPER }}_AGENT_KEY
+
+    Fails closed: an unknown ``AUTH_PROVIDER`` raises before any env read.
+    """
+    if AUTH_PROVIDER not in ("logto", "google"):
+        raise {{ AppCls }}ClientError(
+            exit_code=5,
+            message=(
+                f"machine-to-machine auth is not supported for auth provider "
+                f"{AUTH_PROVIDER!r}"
+            ),
+            error_code="machine_auth_not_supported",
+        )
+
+    base_url = _require_http_url("{{ APP_UPPER }}_API_URL")
+    actor_sub = _require_actor("{{ APP_UPPER }}_USER_SUB")
+
+    if AUTH_PROVIDER == "google":
+        agent_key, source = _load_agent_key()
+        return {{ AppCls }}Client(
+            base_url=base_url,
+            token_manager=AgentKeyTokenProvider(agent_key, source=source),
+            actor_sub=actor_sub,
+        )
+
+    logto_endpoint = _require_http_url("{{ APP_UPPER }}_LOGTO_ENDPOINT")
+    resource = _require_env("{{ APP_UPPER }}_API_RESOURCE")
+    app_id = _require_env("{{ APP_UPPER }}_M2M_APP_ID")
+    app_secret = _require_env("{{ APP_UPPER }}_M2M_APP_SECRET")
+    scopes_str = os.environ.get("{{ APP_UPPER }}_M2M_SCOPES", "")
+    scopes = scopes_str.split()
+
+    token_manager = LogtoM2MTokenManager(
+        endpoint=logto_endpoint,
+        app_id=app_id,
+        app_secret=app_secret,
+        resource=resource,
+        scopes=scopes,
+    )
+    return {{ AppCls }}Client(
+        base_url=base_url,
+        token_manager=token_manager,
+        actor_sub=actor_sub,
+    )
+
+
+def get_client() -> {{ AppCls }}Client:
+    """Return the process-wide client (lazy singleton)."""
+    global _client
+    if _client is None:
+        _client = _build_client()
+    return _client
+
+
+def _reset_client_for_tests() -> None:
+    """Test-only hook: drop the cached singleton so the next get_client()
+    rebuilds. Not exported; tests can call this if they need a clean factory."""
+    global _client
+    _client = None

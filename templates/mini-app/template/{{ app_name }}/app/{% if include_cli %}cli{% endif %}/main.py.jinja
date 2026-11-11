@@ -1,0 +1,96 @@
+"""Top-level Typer app for the `{{ app_name }}` CLI.
+
+A Typer root with a global
+`--json` flag, an `agent-context` command for agent discovery, and
+sub-typers mounted from `app.cli.commands/`. Add new command groups by
+importing them here and calling `app.add_typer(...)`.
+
+Entry point declared in pyproject.toml as
+``[project.scripts] {{ app_name }} = "app.cli.main:app"``.
+"""
+
+from __future__ import annotations
+
+import typer
+
+from app.cli import agent_context, output
+from app.cli.commands import example as example_cmd
+{% if include_backend %}from app.cli.commands import items as items_cmd
+{% endif %}
+
+app = typer.Typer(
+    name="{{ app_name }}",
+    help="{{ app_description }}",
+    no_args_is_help=True,
+)
+
+# Mount the example command at the root so users see at least one
+# working subcommand out of the box. Replace / add command groups as the
+# app grows — every group registered here is auto-discovered by
+# `agent-context --json` via Typer introspection.
+app.add_typer(example_cmd.app, name="example")
+{% if include_backend %}# Typed commands for the app's own API, backed by app/cli/operations.py.
+app.add_typer(items_cmd.app, name="items")
+{% endif %}
+
+@app.callback()
+def main(
+    ctx: typer.Context,
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit JSON to stdout (default: human-readable Rich output on stderr).",
+    ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="Verbose request logging to stderr (auth headers always redacted).",
+    ),
+) -> None:
+    """`{{ app_name }}` CLI — global flags."""
+    ctx.ensure_object(dict)
+    ctx.obj["json"] = json_output
+    ctx.obj["debug"] = debug
+
+
+def _resolve_version() -> str:
+    """Return the CLI's version string.
+
+    Defers the import of `app.routes.version` (if present) so `--help` and
+    `--version` stay fast. Falls back to a hardcoded sentinel if the
+    FastAPI side is unimportable (stripped-install / CLI-only deploy).
+    """
+    try:
+        from app.routes.version import get_version_string  # type: ignore[import-not-found]
+
+        return get_version_string()
+    except Exception:
+        return "0.1.0"
+
+
+@app.command("agent-context")
+def agent_context_cmd(
+    json_output: bool = typer.Option(
+        True,
+        "--json",
+        help="Accepted for symmetry with the global flag; output is always JSON.",
+    ),
+) -> None:
+    """Emit the agent-context v1 envelope: every command, arg, option, exit code.
+
+    Coding agents read this once per session to discover the CLI surface
+    without hard-coding command names. Always JSON (machine-only), so both
+    `agent-context --json` and `--json agent-context` work.
+    """
+    data = agent_context.generate(app, version=_resolve_version())
+    output.render_json(data)
+
+
+@app.command("version")
+def version_cmd() -> None:
+    """Print the CLI version (plain stdout, shell convention)."""
+    typer.echo(_resolve_version())
+
+
+if __name__ == "__main__":
+    app()

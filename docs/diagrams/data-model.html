@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Starting data model</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #fafafa;
+      --color-ink:     #18181b;
+      --color-muted:   #52525b;
+      --color-accent:  #4f46e5;
+      --font-sans:     'Figtree', system-ui, sans-serif;
+      --font-title:    'Urbanist', system-ui, sans-serif;
+      --font-mono:     ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-title);
+      font-size: 1.75rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+
+    svg { width: 100%; min-width: 960px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">ER / data model · generated app</p>
+    <h1>Starting data model</h1>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="data-model-title data-model-desc">
+        <title id="data-model-title">Starting data model</title>
+        <desc id="data-model-desc">Data model of a generated app: one user_profiles row has many rows in the sample items table, linked by user_id, and every API query filters by the caller's user_id.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#52525b"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f46e5"/></marker>
+          <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2563eb"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#fafafa"/>
+
+        <g transform="translate(0,-24)">
+        <!-- ============ Relationship (focal): user_profiles.user_id 1 — N items.user_id ============ -->
+        <line x1="400" y1="268" x2="560" y2="268" stroke="#4f46e5" stroke-width="1.4"/>
+
+        <!-- Cardinality and relationship labels, 6px above the line -->
+        <rect x="406" y="250" width="12" height="12" rx="2" fill="#fafafa"/>
+        <text x="412" y="259" fill="#4f46e5" font-size="10" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">1</text>
+
+        <rect x="542" y="250" width="12" height="12" rx="2" fill="#fafafa"/>
+        <text x="548" y="259" fill="#4f46e5" font-size="10" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">N</text>
+
+        <rect x="444" y="250" width="72" height="12" rx="2" fill="#fafafa"/>
+        <text x="480" y="259" fill="#4f46e5" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">BY USER_ID</text>
+
+        <!-- ============ Callout (one) ============ -->
+        <path d="M 480 424 Q 468 352 480 270" fill="none" stroke="rgba(79,70,229,0.50)" stroke-width="1" stroke-dasharray="4,3"/>
+        <circle cx="480" cy="268" r="2.5" fill="#4f46e5"/>
+        <text x="480" y="444" fill="#18181b" font-size="14" font-style="italic" font-family="'Urbanist', system-ui, sans-serif" text-anchor="middle">user_id comes from sign-in, never from the request body.</text>
+
+        <!-- ============ Entity: user_profiles ============ -->
+        <rect x="120" y="212" width="280" height="152" rx="6" fill="#fafafa"/>
+        <rect x="120" y="212" width="280" height="152" rx="6" fill="#ffffff" stroke="#18181b" stroke-width="1"/>
+        <rect x="120" y="212" width="280" height="40" rx="6" fill="rgba(24,24,27,0.04)" stroke="none"/>
+        <rect x="120" y="244" width="280" height="8" fill="rgba(24,24,27,0.04)"/>
+        <line x1="120" y1="252" x2="400" y2="252" stroke="rgba(24,24,27,0.22)" stroke-width="1"/>
+        <text x="136" y="228" fill="#52525b" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="0.14em">TABLE</text>
+        <text x="136" y="244" fill="#18181b" font-size="14" font-weight="600" font-family="'Figtree', system-ui, sans-serif">user_profiles</text>
+
+        <text x="136" y="272" fill="#18181b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"># user_id</text>
+        <text x="384" y="272" fill="#52525b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">string</text>
+        <text x="148" y="286" fill="#6b6b76" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">e.g. "google:1234567890"</text>
+        <text x="136" y="308" fill="#18181b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">timezone</text>
+        <text x="384" y="308" fill="#52525b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">string · default "UTC"</text>
+        <text x="136" y="328" fill="#18181b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">created_at</text>
+        <text x="384" y="328" fill="#52525b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">timestamptz</text>
+        <text x="136" y="348" fill="#18181b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">updated_at</text>
+        <text x="384" y="348" fill="#52525b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">timestamptz</text>
+
+        <!-- ============ Entity: items (sample table, dashed) ============ -->
+        <rect x="560" y="152" width="280" height="176" rx="6" fill="#fafafa"/>
+        <rect x="560" y="152" width="280" height="176" rx="6" fill="rgba(24,24,27,0.02)" stroke="rgba(24,24,27,0.45)" stroke-width="1" stroke-dasharray="4,3"/>
+        <rect x="560" y="152" width="280" height="40" rx="6" fill="rgba(24,24,27,0.04)" stroke="none"/>
+        <rect x="560" y="184" width="280" height="8" fill="rgba(24,24,27,0.04)"/>
+        <line x1="560" y1="192" x2="840" y2="192" stroke="rgba(24,24,27,0.22)" stroke-width="1"/>
+        <text x="576" y="168" fill="#52525b" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="0.14em">SAMPLE TABLE · REPLACE OR EXTEND</text>
+        <text x="576" y="184" fill="#18181b" font-size="14" font-weight="600" font-family="'Figtree', system-ui, sans-serif">items</text>
+
+        <text x="576" y="212" fill="#18181b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"># id</text>
+        <text x="824" y="212" fill="#52525b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">string(36) · UUID</text>
+        <text x="576" y="232" fill="#18181b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">name</text>
+        <text x="824" y="232" fill="#52525b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">string(255) · not null</text>
+        <text x="576" y="252" fill="#18181b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">description</text>
+        <text x="824" y="252" fill="#52525b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">text · null</text>
+        <text x="576" y="272" fill="#18181b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">→ user_id</text>
+        <text x="824" y="272" fill="#52525b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">string · indexed</text>
+        <text x="576" y="292" fill="#18181b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">created_at</text>
+        <text x="824" y="292" fill="#52525b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">timestamptz · indexed</text>
+        <text x="576" y="312" fill="#18181b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">updated_at</text>
+        <text x="824" y="312" fill="#52525b" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">timestamptz</text>
+
+        </g>
+
+        <!-- ============ Legend ============ -->
+        <line x1="40" y1="552" x2="920" y2="552" stroke="rgba(24,24,27,0.10)" stroke-width="0.8"/>
+        <text x="40" y="579" fill="#52525b" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="0.18em">LEGEND</text>
+
+        <rect x="120" y="571" width="14" height="10" rx="2" fill="#ffffff" stroke="#18181b" stroke-width="1"/>
+        <text x="140" y="579" fill="#52525b" font-size="8.5" font-family="'Figtree', system-ui, sans-serif">Table</text>
+
+        <rect x="196" y="571" width="14" height="10" rx="2" fill="rgba(24,24,27,0.02)" stroke="rgba(24,24,27,0.45)" stroke-width="1" stroke-dasharray="3,2"/>
+        <text x="216" y="579" fill="#52525b" font-size="8.5" font-family="'Figtree', system-ui, sans-serif">Sample table</text>
+
+        <text x="304" y="579" fill="#18181b" font-size="10" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">#</text>
+        <text x="318" y="579" fill="#52525b" font-size="8.5" font-family="'Figtree', system-ui, sans-serif">Primary key</text>
+
+        <text x="400" y="579" fill="#18181b" font-size="10" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">→</text>
+        <text x="414" y="579" fill="#52525b" font-size="8.5" font-family="'Figtree', system-ui, sans-serif">Foreign key</text>
+
+        <line x1="496" y1="576" x2="524" y2="576" stroke="#4f46e5" stroke-width="1.4"/>
+        <text x="532" y="579" fill="#52525b" font-size="8.5" font-family="'Figtree', system-ui, sans-serif">user_id link: one profile has many items (1 to N)</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

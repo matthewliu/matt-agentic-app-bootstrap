@@ -1,0 +1,79 @@
+"""Integration tests for items API — full CRUD flow via HTTP client."""
+
+import pytest
+from httpx import AsyncClient
+
+
+class TestItemsApi:
+    """Test the /api/items endpoints end-to-end."""
+
+    @pytest.mark.asyncio
+    async def test_create_and_get_item(self, async_client: AsyncClient):
+        """POST /api/items then GET /api/items/{id} returns the created item."""
+        create_resp = await async_client.post(
+            "/api/items",
+            json={"name": "Integration Item", "description": "Created via API"},
+        )
+        assert create_resp.status_code == 201
+        item = create_resp.json()
+        assert item["name"] == "Integration Item"
+        assert "id" in item
+
+        get_resp = await async_client.get(f"/api/items/{item['id']}")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["name"] == "Integration Item"
+
+    @pytest.mark.asyncio
+    async def test_list_items(self, async_client: AsyncClient):
+        """GET /api/items returns a list."""
+        response = await async_client.get("/api/items")
+        assert response.status_code == 200
+        assert isinstance(response.json(), list)
+
+    @pytest.mark.asyncio
+    async def test_update_item(self, async_client: AsyncClient):
+        """PUT /api/items/{id} updates the item."""
+        create_resp = await async_client.post(
+            "/api/items", json={"name": "Before Update"}
+        )
+        item_id = create_resp.json()["id"]
+
+        update_resp = await async_client.put(
+            f"/api/items/{item_id}", json={"name": "After Update"}
+        )
+        assert update_resp.status_code == 200
+        assert update_resp.json()["name"] == "After Update"
+
+    @pytest.mark.asyncio
+    async def test_delete_item(self, async_client: AsyncClient):
+        """DELETE /api/items/{id} removes the item."""
+        create_resp = await async_client.post(
+            "/api/items", json={"name": "To Delete"}
+        )
+        item_id = create_resp.json()["id"]
+
+        delete_resp = await async_client.delete(f"/api/items/{item_id}")
+        assert delete_resp.status_code == 204
+
+        get_resp = await async_client.get(f"/api/items/{item_id}")
+        assert get_resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_nonexistent_item_returns_404(self, async_client: AsyncClient):
+        """GET /api/items/{id} with invalid ID returns 404."""
+        response = await async_client.get("/api/items/nonexistent-id")
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_create_item_validation_error(self, async_client: AsyncClient):
+        """POST /api/items with invalid body returns 422."""
+        response = await async_client.post("/api/items", json={"name": ""})
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_health_no_auth_required(self, async_client: AsyncClient):
+        """GET /health does not require authentication."""
+        response = await async_client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"

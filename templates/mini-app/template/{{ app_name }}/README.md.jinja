@@ -1,0 +1,346 @@
+# {{ app_name }}
+
+{{ app_description }}
+
+## Quick Start
+
+This app needs Python 3.12 or newer. Check with `python3 --version`. If it shows an older version, use a newer Python's command (for example `python3.12`) in place of `python3`.
+
+```bash
+# Create virtual environment (Python 3.12 or newer).
+# With uv instead: uv venv --python 3.12 --seed .venv
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install -e ".[dev]"
+
+# Set up environment variables
+cp .env.example .env
+# Edit .env with your credentials
+{% if include_db %}
+# Start the local Postgres (needs Docker), then create the tables
+docker compose up -d db
+{{ app_name }}-migrate
+{% endif %}
+# Run the development server
+uvicorn app.main:app --reload
+```
+
+The API is now running at [http://localhost:8000](http://localhost:8000).
+{% if include_db %}
+`compose.yaml` runs Postgres 16 on `127.0.0.1:5432`. `.env.example` already holds the matching `DATABASE_URL`. These are fixed local values, not secrets. `docker compose down` stops Postgres and keeps the data. `docker compose down -v` deletes the data. If port 5432 is in use, change the left port in `compose.yaml` and the port in `DATABASE_URL`. The tests use SQLite in memory, so `pytest` needs no Postgres.
+{% endif %}
+## API Documentation
+
+FastAPI auto-generates interactive API docs:
+- **Swagger UI:** [http://localhost:8000/docs](http://localhost:8000/docs)
+- **ReDoc:** [http://localhost:8000/redoc](http://localhost:8000/redoc)
+
+## Development
+
+```bash
+# Run tests
+pytest
+
+# Run tests with coverage
+pytest --cov=app
+
+# Lint
+ruff check .
+
+# Format
+ruff format .
+{% if include_db %}
+# Run all database migrations (reads DATABASE_URL from .env)
+{{ app_name }}-migrate
+
+# Create a new migration after you change app/db/models.py
+alembic -c app/db/migrations/alembic.ini revision --autogenerate -m "description"
+{% endif %}```
+{% if include_frontend %}
+## Frontend
+
+This app is a pnpm workspace. Run these commands from the app folder, not from `frontend/`.
+
+```bash
+# Install dependencies (frontend and shared packages)
+pnpm install
+
+# Run dev server (proxies /api to FastAPI)
+pnpm -C frontend dev
+
+# Run tests
+pnpm -C frontend test
+
+# Build for production
+pnpm -C frontend build
+```
+{% endif %}{% if auth_provider == 'google' and include_backend %}
+## Google sign-in
+
+People sign in with their Google account. The backend does the whole OpenID Connect sign-in and keeps a signed, HttpOnly session cookie. The browser never gets a Google token. Only the emails in `AUTH_ALLOWED_EMAILS` get access. Until every required setting is set, every protected API route returns 503 `auth_not_configured`. The app gives no data to anyone while it is not configured.
+
+### Settings
+
+| Setting | Required | Value |
+|---|---|---|
+| `GOOGLE_CLIENT_ID` | Yes | Client ID of this app's own Google OAuth client. |
+| `GOOGLE_CLIENT_SECRET` | Yes | Client secret of that client. Keep it on the server only. |
+| `SESSION_SECRET` | Yes | At least 32 random characters. Render generates it. Changing it signs everybody out. |
+| `AUTH_ALLOWED_EMAILS` | Yes | Comma-separated emails that may sign in. Empty means nobody. |
+| `APP_BASE_URL` | {% if deploy_target == "render" %}Local and custom domains{% else %}Yes{% endif %} | The address people open, for example `http://localhost:8000`. On Render it defaults to `RENDER_EXTERNAL_URL`. It must be `https`, except `http` on `localhost` or `127.0.0.1`. |
+| `SESSION_MAX_AGE_SECONDS` | No | Session length. Default `28800` (8 hours). |
+| `AGENT_CREDENTIALS` | No | Agent key hashes for the CLI and MCP server. See "Agent keys". |
+
+These settings load only from this app's `.env` and the process environment. They never load from the shared `~/.agentic-apps.env`.
+
+{% if deploy_target == "render" %}### Set up on Render
+
+Do these steps in this order. Render assigns the service URL when you apply the Blueprint, and Google needs that exact URL.
+
+1. Apply the Blueprint (see "Deployment"). Leave `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `AUTH_ALLOWED_EMAILS`, and `AGENT_CREDENTIALS` empty. The app starts and returns 503 on protected routes.
+2. In the Render dashboard, copy the service URL, for example `https://{{ app_name }}.onrender.com`.
+3. In [Google Cloud Console](https://console.cloud.google.com/), select or create a project.
+4. Open **Google Auth Platform > Branding** (on older consoles: **APIs & Services > OAuth consent screen**). Set the app name and the support email.
+5. Open **Audience**. Select **External**. Then do one of these:
+   - Click **Publish app** to set the status to **In production**. The app asks only for `openid` and `email`, so Google does not require verification.
+   - Or keep the status **Testing** and add each person in `AUTH_ALLOWED_EMAILS` as a test user. Google blocks all other accounts with an "access blocked" page.
+6. Open **Clients > Create client**. Select **Web application**.
+7. Under **Authorized redirect URIs**, add `<service URL>/auth/callback`, for example `https://{{ app_name }}.onrender.com/auth/callback`. Do not add a JavaScript origin. The app sends no request to Google from browser JavaScript.
+8. Copy the client ID and the client secret. Google shows the secret only once.
+9. In the Render dashboard, open the service, then **Environment**. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `AUTH_ALLOWED_EMAILS`. Save. Render restarts the service.
+10. Open the service URL and sign in.
+
+If you add a custom domain later, set `APP_BASE_URL` to it and add `<custom domain>/auth/callback` to the Google client.
+
+{% else %}### Set up on Railway
+
+1. Copy the public URL of the app service from Railway.
+2. In [Google Cloud Console](https://console.cloud.google.com/), set up the app under **Google Auth Platform**. Publish the app or add your allowed accounts as test users.
+3. Create a **Web application** OAuth client. Add `<public URL>/auth/callback` under **Authorized redirect URIs**.
+4. In the Railway app service variables, set `APP_BASE_URL` to the public URL. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `AUTH_ALLOWED_EMAILS`.
+5. Set `SESSION_SECRET` to at least 32 random characters. Keep the secret out of Git and chat.
+6. Deploy with these variables. Open the public URL and sign in.
+
+{% endif %}### Set up locally
+
+1. Create a second Google OAuth client (Web application) for local work, so the production secret stays on the app service.
+2. Add the redirect URI `http://localhost:8000/auth/callback`.{% if include_frontend %} If you use the Vite dev server, use `http://localhost:5173/auth/callback` and set `APP_BASE_URL=http://localhost:5173`.{% endif %}
+3. Put the values in `.env` (see `.env.example`).
+4. Open the app at exactly the `APP_BASE_URL` host. If you open `127.0.0.1` while `APP_BASE_URL` says `localhost`, the app first moves you to `localhost`.
+
+### Agent keys (CLI and MCP server)
+
+Agents never use Google. An agent uses an agent key that you create for one person. The key acts only as that person. It can only read, unless you allow writes.
+
+1. Sign in with Google in the browser, then open `/auth/session`. Copy the `user_id` value, for example `google:1234567890`.
+2. Create the key. The key goes to a new file with mode 0600. The command prints only the file path and the public entry:
+
+   ```bash
+   python -m app.auth.agent_keys new --id laptop-cli --actor google:1234567890 \
+       --out laptop-cli.agent-key            # add --write to allow writes
+   ```
+
+   Optional: `--expires 2027-01-01T00:00:00Z` (UTC). The key stops at that instant.
+3. Add the printed `entry` object to the JSON list in `AGENT_CREDENTIALS` on the server. The list holds only hashes.
+4. Give the key file to the agent's machine. Never print the key, paste it into a chat, or commit it. `.gitignore` ignores `*.agent-key`.
+
+To revoke a key, remove its entry from `AGENT_CREDENTIALS`. Render restarts the service. To rotate a key, add a new entry, switch the client to the new key, then remove the old entry.
+
+An agent key has no email, so the allowlist does not apply to it. To end a person's access, do both steps: remove the email from `AUTH_ALLOWED_EMAILS`, and remove every `AGENT_CREDENTIALS` entry whose `actor` is that person. Both changes apply when the service restarts.
+
+A client sends the key as `Authorization: Bearer agk.<id>.<secret>` with the `X-{{ app_name | replace('-', '_') | upper }}-Actor-Sub` header. The generated CLI and MCP server send the key for you. See "Machine credential" in the "CLI and MCP Server" section for their settings.
+
+### What each failure means
+
+| Response | Cause | Fix |
+|---|---|---|
+| 503 `auth_not_configured` | A required setting is missing or invalid. | Set every required setting in "Settings". |
+| Login page: "not on the list" (`not_allowed`) | The Google email is not in `AUTH_ALLOWED_EMAILS`, or it was removed. | Add the email, or sign in with another account. |
+| Login page: `email_not_verified` | Google has not verified the account email. | Verify the email with Google. |
+| Login page: `login_failed` | The sign-in did not finish or the ID token failed a check. | Try again. Check the redirect URI and the client ID. |
+| Google page: "redirect_uri_mismatch" | The redirect URI in Google differs from `<APP_BASE_URL>/auth/callback`. | Fix the URI in Google Cloud Console. |
+| Google page: "access blocked" | The consent screen is in Testing and the account is not a test user. | Publish the app, or add the test user. |
+| 400 `base_url_host_mismatch` | A proxy changes the `Host` header, so it never matches `APP_BASE_URL`. | Set `APP_BASE_URL` to the address people open. |
+| 401 `not_authenticated` / `session_expired` | No session, or the session is older than `SESSION_MAX_AGE_SECONDS`. | Sign in again. |
+| 403 `csrf_failed` | A browser write did not send the session's `X-CSRF-Token`. | Send the token from `/auth/session`. |
+| 401 `machine_auth_not_configured` | An agent sent a key, but `AGENT_CREDENTIALS` is empty. | Add the key entry. |
+| 503 `agent_credentials_invalid` | `AGENT_CREDENTIALS` is not valid JSON, or an entry breaks a rule (duplicate, unknown field, bad value). | Fix the list. Browser sign-in still works. |
+| 401 `invalid_agent_credential` | `AGENT_CREDENTIALS` has entries, and the request sent something that is not a valid agent key: a Google or Logto token, an unknown key ID, or a wrong secret. | Use an agent key from the tool. |
+| 401 `agent_credential_expired` | The entry's `expires` instant has passed. | Create a new key. |
+| 403 `missing_actor_sub_header` / `actor_mismatch` | The actor header is missing, or it names a different person than the key. | Send the key's own actor. |
+| 403 `missing_scope` | A read-only key tried to write. | Create a key with `--write`. |
+
+This app has no mobile app. Google sign-in for the Expo app is not built yet.
+{% endif %}
+## Deployment
+{% if deploy_target == 'render' %}
+This app deploys to [Render](https://render.com).
+The Render Blueprint in `render.yaml` is the only deploy definition.
+It declares the Docker web service `{{ app_name }}`{% if include_db %} and the Postgres database `{{ app_name }}-db`{% endif %}.
+Do not create or change these resources by hand in the dashboard.
+
+### First deploy
+
+1. Push this repo to GitHub.
+2. Open `https://render.com/deploy?repo=<github-url>`. Replace `<github-url>` with the URL of this repo. You can also use New > Blueprint in the Render dashboard.
+3. Read the plans and the monthly cost. Then apply the Blueprint.
+4. If no deploy starts, start one manual deploy from the service page.
+
+### After the first deploy
+
+- A change to `render.yaml` merged to `main` syncs to the live services.
+- Render deploys a new commit on `main` only after CI passes (`autoDeployTrigger: checksPass`).
+{% if include_db %}- `render.yaml` sets `DATABASE_URL` from the `{{ app_name }}-db` database.
+- Migrations run as the pre-deploy command: `{{ app_name }}-migrate`. It runs `alembic -c app/db/migrations/alembic.ini upgrade head` with no arguments, because Render drops pre-deploy arguments on Docker services.
+- The database accepts no external connections (`ipAllowList: []`). For manual database work, use the Shell tab of the web service in the Render dashboard, or `render ssh`.
+{% endif %}{% if include_backend %}{% if auth_provider == 'google' %}- Sign-in uses Google. Protected API routes return 503 `auth_not_configured` until the Google settings are set. `/health` returns 200. See "Google sign-in" for the setup order.
+{% else %}- Auth is not configured. This app has no Logto application yet. Protected API routes return 503 `auth_not_configured`, whatever token is sent. `/health` returns 200.
+- Register a Logto API resource for this app. Grant the `read` scope to the intended users. Set `LOGTO_ENDPOINT` and `LOGTO_API_RESOURCE` in the Render service environment.
+{% if include_frontend %}- Create a Logto single page app for this service. Set its redirect URI to `<service URL>/callback` and its sign-out URI to `<service URL>`. Set `LOGTO_APP_ID` to its client ID. Set `VITE_LOGTO_ENDPOINT`, `VITE_LOGTO_APP_ID`, and `VITE_LOGTO_API_RESOURCE` to the same values as their server settings. Redeploy to rebuild the frontend.
+{% endif %}- For machine access, create a separate Logto machine-to-machine client for this app. Grant it the API scopes it needs. Set `LOGTO_M2M_AGENT_APP_ID` and `{{ app_name | replace('-', '_') | upper }}_M2M_ACTOR_SUBS` on the service. Keep the client secret only where the CLI or MCP server runs.
+{% endif %}- Leave `CORS_ORIGINS` unset on Render. The app then allows only its own `RENDER_EXTERNAL_URL`.
+{% endif %}- Do not add CLI-only secrets to `render.yaml`. Render passes every service env var to the Docker build.
+{% else %}
+This app is configured for [Railway](https://railway.app) deployment:
+- Auto-deploys from `main` branch via GitHub integration
+- PostgreSQL provisioned as a Railway service
+- Environment variables configured in Railway dashboard
+- Start command defined in `railway.json`
+{% endif %}
+{% if include_db or (include_backend and (auth_provider == 'google' or (include_frontend and include_cli))) %}## How this app works
+
+The diagrams are in `docs/diagrams/`. Each `.svg` file has an `.html` source that you can edit.
+
+{% if include_frontend and include_cli and include_backend %}People use the web app. Agents use the CLI or the MCP server. All three call the same API with the same sign-in and data rules. Only the API opens the database.
+
+![One API for people and agents: a person uses the web app, an AI agent uses the CLI or the MCP server, and all three call one FastAPI API that alone reads and writes Postgres.](docs/diagrams/one-api-three-doors.svg)
+
+{% endif %}{% if auth_provider == 'google' and include_backend %}The API checks each protected request in a fixed order. A request with an `Authorization` header must carry a valid agent key. A request without it must carry a valid session cookie, and a write must also send the CSRF token.
+
+![How the API decides who you are: if sign-in settings are missing the API returns 503; if an Authorization header is present only a valid agent key passes; otherwise a valid session cookie is needed, and a write also needs a matching CSRF token.](docs/diagrams/auth-decision.svg)
+
+{% endif %}{% if include_db %}The app starts with two tables. `user_profiles` has one row for each person. `items` is a sample table: replace it or add your own. The API takes `user_id` from sign-in, never from the request body, and each query filters by it.
+
+![Starting data model: user_profiles has one row per person, keyed by user_id such as google:1234567890; items has many rows per person, linked by user_id.](docs/diagrams/data-model.svg)
+
+{% endif %}{% if include_frontend and include_db %}On your computer, run the backend, the Vite dev server, and Postgres in Docker. Open the app at http://localhost:5173.
+
+![Run an app on your computer: the browser opens the Vite dev server on port 5173, which forwards /api and /auth to FastAPI on port 8000, which uses Postgres in Docker on port 5432 and reads settings from the .env file.](docs/diagrams/local-dev-setup.svg)
+
+{% endif %}{% endif %}## Architecture
+
+```
+app/
+├── main.py          # FastAPI entry point, CORS, router includes
+├── config.py        # Pydantic Settings (env var management)
+├── auth/            # {% if auth_provider == 'google' %}Google session checks + agent keys{% else %}Logto JWT middleware{% endif %}
+├── routes/          # API endpoint handlers
+├── models/          # Pydantic request/response models
+├── services/        # Business logic
+└── db/              # SQLAlchemy engine, ORM models, Alembic
+```
+
+{% if include_cli and include_backend %}{% set APP_UPPER = app_name.replace('-', '_').upper() %}{% set GOOGLE_MODE = (auth_provider | default('logto')) == 'google' %}## CLI and MCP Server
+
+This app has a CLI (`{{ app_name }}`) and an MCP server (`{{ app_name }}-mcp`). Both use the same typed operations in `app/cli/operations.py`. Both call this app's HTTP API with a machine credential. Neither opens the database, so the API's auth and per-user data scope always apply.
+
+| Operation ID | CLI | MCP tool | Access |
+|---|---|---|---|
+| `items_list` | `{{ app_name }} items list` | yes | read |
+| `items_get` | `{{ app_name }} items get <id>` | yes | read |
+| `items_create` | `{{ app_name }} items create --name <name>` | only with writes turned on | write |
+| `items_update` | `{{ app_name }} items update <id> --name <name>` | only with writes turned on | write |
+| `items_delete` | `{{ app_name }} items delete <id> --yes` | never | destructive |
+
+The operation ID is also the FastAPI `operationId` on the route. `{{ app_name }} agent-context --json` lists every operation with its input and output JSON Schema.
+
+### Rules
+
+- The CLI and the MCP server act for one user, `{{ APP_UPPER }}_USER_SUB`. No command or tool takes a user argument.
+- The MCP server offers read tools only. Set `{{ APP_UPPER }}_MCP_ALLOW_WRITES=true` where the server runs to add `items_create` and `items_update`.
+- Turn on writes only when the user controls all item text. Text inside returned items can influence the write calls that a model makes.
+- The read-only default limits what the MCP host is offered. It is not server-side authorization. Anyone who holds the credential can call the API directly.
+{% if GOOGLE_MODE %}- The server enforces the agent key's scope. A read-only key cannot write.
+{% else %}- The server enforces one required scope (`read` by default) for every route. Anyone who holds the M2M secret can read and write the allowed users' items.
+{% endif %}- `items delete` needs `--yes`. Options that you leave out are not sent, so `items update <id> --name X` keeps the description.
+- With `--json`, the CLI prints one JSON object. On failure it prints `{"status": "failed", "error_code": ..., "exit_code": ...}`.
+- An MCP tool error reads `Error executing tool <tool>: <error_code>: <message>`.
+- Error messages never contain a token, a secret, or an agent key.
+
+### Machine credential
+
+{% if GOOGLE_MODE %}Google sign-in is for people in a browser only. The CLI and the MCP server use an **agent key** that this app's server configures. A Google token never works as a machine credential.
+
+1. Sign in to the app once with Google. Open `/auth/session` and copy `user_id` (for example `google:1234`).
+2. Create a key in the app directory. Read-only is the default. Add `--write` only if the agent must create or change items.
+
+   ```bash
+   python -m app.auth.agent_keys new --id cli --actor google:1234 --out cli.agent-key
+   ```
+
+   The command writes the key to `cli.agent-key` with mode 0600 and prints only the server entry. Do not print or `cat` the key file. `.gitignore` ignores `*.agent-key`.
+3. Add the printed entry to the `AGENT_CREDENTIALS` JSON list in the web service's environment. The server stores only the hash of the key.
+4. Where the CLI or MCP server runs, set `{{ APP_UPPER }}_API_URL`, `{{ APP_UPPER }}_USER_SUB` (the same `user_id`), and `{{ APP_UPPER }}_AGENT_KEY_FILE` (the key file path). `{{ APP_UPPER }}_AGENT_KEY` (the key itself) is a fallback only.
+
+To revoke a key, remove its entry from `AGENT_CREDENTIALS`. To rotate, add a new entry, switch the client, then remove the old entry. A running MCP server keeps the key it loaded first, so restart it after you switch keys.
+{% else %}The CLI and the MCP server use this app's Logto M2M client. Set these where they run: `{{ APP_UPPER }}_API_URL`, `{{ APP_UPPER }}_LOGTO_ENDPOINT`, `{{ APP_UPPER }}_API_RESOURCE`, `{{ APP_UPPER }}_M2M_APP_ID`, `{{ APP_UPPER }}_M2M_APP_SECRET`, and `{{ APP_UPPER }}_USER_SUB`. The server must list that user in `{{ APP_UPPER }}_M2M_ACTOR_SUBS`. See `AGENT_CONTEXT.md` for the identity model.
+{% endif %}
+A missing or malformed setting makes the CLI exit with code 5 and makes each MCP tool return `misconfigured`, before any network call.
+
+### Add the MCP server to Claude Code
+
+Install the extra, then add the server with local scope so its config stays out of the repository:
+
+```bash
+pip install -e '.[mcp]'
+claude mcp add-json --scope local {{ app_name }} "$(cat <<'JSON'
+{
+  "type": "stdio",
+  "command": "/absolute/path/to/{{ app_name }}/.venv/bin/{{ app_name }}-mcp",
+  "env": {
+    "{{ APP_UPPER }}_API_URL": "${{ '{' }}{{ APP_UPPER }}_API_URL}",
+    "{{ APP_UPPER }}_USER_SUB": "${{ '{' }}{{ APP_UPPER }}_USER_SUB}",
+{% if GOOGLE_MODE %}    "{{ APP_UPPER }}_AGENT_KEY_FILE": "${{ '{' }}{{ APP_UPPER }}_AGENT_KEY_FILE}"
+{% else %}    "{{ APP_UPPER }}_LOGTO_ENDPOINT": "${{ '{' }}{{ APP_UPPER }}_LOGTO_ENDPOINT}",
+    "{{ APP_UPPER }}_API_RESOURCE": "${{ '{' }}{{ APP_UPPER }}_API_RESOURCE}",
+    "{{ APP_UPPER }}_M2M_APP_ID": "${{ '{' }}{{ APP_UPPER }}_M2M_APP_ID}",
+    "{{ APP_UPPER }}_M2M_APP_SECRET": "${{ '{' }}{{ APP_UPPER }}_M2M_APP_SECRET}"
+{% endif %}  }
+}
+JSON
+)"
+```
+
+Each `${VAR}` is a reference. Claude Code fills it from your environment when it starts the server. If a variable is not set, the literal text stays, and the server fails closed with a typed error. Keep the real values in your shell environment or a secret manager. Never put a secret value in `.mcp.json` or any other committed file.
+
+{% endif %}## Per-App Token Isolation
+
+This app inherits the eight per-app isolation invariants from `agentic-core`'s
+`docs/SECURITY.md`. They are day-1 architectural constraints, not aspirational
+goals — Track C tests in `agentic-core` enforce them mechanically. The labels
+below match the canonical spec; grep for "Invariant N" to cross-reference.
+
+{% if auth_provider == 'google' %}- **Invariant 1 — Per-app agent credentials.** Agent keys exist only in this app's `AGENT_CREDENTIALS` (hashes only). Each key acts for one person, and a key from another app never matches.
+- **Invariant 2 — Per-app audience.** This app has its own Google OAuth client. The backend accepts an ID token only when its `aud` is exactly this app's `GOOGLE_CLIENT_ID`, and it never accepts a Google token as an API credential.
+- **Invariant 3 — Per-app session.** The session cookie is signed with this app's own `SESSION_SECRET` and is bound to this app's host, so it cannot sign in to a sibling app.
+{% else %}- **Invariant 1 — Per-app M2M client.** This app has its own Logto Machine-to-Machine application. `LOGTO_M2M_APP_ID` and `LOGTO_M2M_APP_SECRET` are unique to this app and never shared with siblings.
+- **Invariant 2 — Per-app API resource.** The API resource indicator is `https://{{ app_name }}.<platform-domain>/api` with its own scope set. Every minted token's `aud` claim must match; tokens from other apps are rejected by the FastAPI middleware.
+- **Invariant 3 — Per-app SPA + per-app user.** Human login uses this app's own Logto Single-Page Application and a dedicated `app_{{ app_name | replace('-', '_') }}` user, so a leaked session cookie cannot silent-SSO into other apps.
+{% endif %}- **Invariant 4 — No shared admin client at runtime.** The `agentic-core-admin` Management API client lives only in the operator's encrypted keystore. It is never written into this app's `.env`, {% if deploy_target == 'render' %}Render env vars, `render.yaml`{% else %}Railway env vars{% endif %}, `Dockerfile`, or `.bootstrap-state.json`.
+- **Invariant 5 — One secret store per app.** {% if deploy_target == 'render' %}Secrets live only in the env vars of this app's own Render service. No Render environment group is shared with another app.{% else %}Secrets live exclusively in this app's own Railway project; no Railway "shared variables" span projects. An agent platform can add a per-project allowlist on top.{% endif %}
+{% if auth_provider == 'google' %}- **Invariant 6 — Per-app rotation.** Rotating this app's Google client secret, session secret, or agent keys touches no other app.
+- **Invariant 7 — Audit-friendly use.** The auth middleware logs the app slug, the auth method, the user ID, the agent key ID, and the decision for every request. It never logs an email, a token, or a key.
+{% else %}- **Invariant 6 — Per-app rotation.** Rotating this app's M2M secret, SPA credentials, or API resource touches no other app. Operators rotate one app at a time without platform-wide downtime.
+- **Invariant 7 — Audit-friendly token use.** FastAPI middleware logs the app slug, M2M client ID, and actor sub on every validated request so anomalies (cross-app reuse, off-hours bursts) are detectable downstream.
+{% endif %}- **Invariant 8 — No long-lived secrets in source.** The shipped `.gitignore` covers `.env`, `*.keystore.json`, {% if auth_provider == 'google' %}`*.agent-key`, {% endif %}`*.bak*`, `*.last-good`, and `.bootstrap-state.json`. The `.env.example` carries only {% if auth_provider == 'google' %}empty values for secrets and local URL defaults{% else %}`<set-in-host>`{% if deploy_target == 'railway' %} and `<generated-by-scaffold>`{% endif %} placeholders and empty values{% endif %}; an entropy gate test rejects any real secret pasted in by mistake.
+
+Variants without auth (`static-dashboard --no-auth`) skip Invariants 1-3, 6,
+and 7 because the surfaces they cover do not exist. Invariants 4, 5, and 8
+remain universal: even a static dashboard must not embed admin credentials or
+commit secrets.
+
+## License
+
+Private{% if github_user %} — {{ github_user }}{% endif %}

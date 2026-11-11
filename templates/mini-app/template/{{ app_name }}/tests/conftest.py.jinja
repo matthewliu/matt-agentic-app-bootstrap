@@ -1,0 +1,150 @@
+"""Shared test fixtures for {{ app_name }}."""
+
+import asyncio
+import os
+from collections.abc import AsyncGenerator
+
+# Set test defaults for required env vars before importing app modules
+os.environ.setdefault("LOGTO_ENDPOINT", "https://logto.example.com")
+os.environ.setdefault(
+    "LOGTO_API_RESOURCE", "https://{{ app_name }}.{{ platform_domain }}/api"
+)
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite://")
+
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from app.auth.middleware import validate_token
+from app.db.engine import get_db
+from app.db.models import Base, UserProfile
+from app.main import app
+
+TEST_USER_ID = "test-user-id"
+
+# Use in-memory SQLite for tests (no Postgres needed)
+TEST_DATABASE_URL = "sqlite+aiosqlite://"
+
+test_engine = create_async_engine(TEST_DATABASE_URL, echo=False)
+TestSessionLocal = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+
+
+@pytest.fixture(scope="session")
+def event_loop():
+    """Create a single event loop for the test session."""
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def setup_db():
+    """Create tables before each test and drop after."""
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+
+
+async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+    """Override the get_db dependency to use the test database."""
+    async with TestSessionLocal() as session:
+        yield session
+
+
+def mock_claims(
+    sub: str = "test-user-id",
+    scope: str = "read write",
+) -> dict:
+    """Create mock JWT claims for testing."""
+    return {
+        "sub": sub,
+        "scope": scope,
+        "iss": "https://logto.example.com/oidc",
+        "aud": "https://{{ app_name }}.{{ platform_domain }}/api",
+{% if auth_provider == 'google' %}        # The claims shape of a signed-in person in Google mode.
+        "scopes": scope.split(),
+        "auth_method": "session",
+        "email": "test-user@example.com",
+{% endif %}    }
+
+
+async def override_validate_token() -> dict:
+    """Override auth dependency to return mock claims."""
+    return mock_claims()
+
+
+# Apply dependency overrides
+app.dependency_overrides[get_db] = override_get_db
+app.dependency_overrides[validate_token] = override_validate_token
+
+
+@pytest_asyncio.fixture
+async def async_client() -> AsyncGenerator[AsyncClient, None]:
+    """HTTP client for testing API endpoints."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+
+@pytest_asyncio.fixture
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Database session for direct DB operations in tests."""
+    async with TestSessionLocal() as session:
+        yield session
+
+
+@pytest_asyncio.fixture
+async def test_user(db_session: AsyncSession) -> UserProfile:
+    """Create a test user profile for use in item tests."""
+    profile = UserProfile(user_id=TEST_USER_ID, timezone="UTC")
+    db_session.add(profile)
+    await db_session.commit()
+    await db_session.refresh(profile)
+    return profile
+{% if auth_provider == 'google' %}
+
+# ---------------------------------------------------------------------------
+# Google sign-in and agent key fixtures (tests/google_fake.py plays Google)
+# ---------------------------------------------------------------------------
+
+import httpx2  # noqa: E402
+
+from app.config import auth_settings  # noqa: E402
+from app.routes import auth as auth_routes  # noqa: E402
+from tests import google_fake  # noqa: E402
+
+
+@pytest.fixture
+def configured(monkeypatch):
+    """Google sign-in fully configured; the real auth dependency in use."""
+    monkeypatch.delitem(app.dependency_overrides, validate_token, raising=False)
+    monkeypatch.setattr(auth_settings, "google_client_id", google_fake.CLIENT_ID)
+    monkeypatch.setattr(auth_settings, "google_client_secret", google_fake.CLIENT_SECRET)
+    monkeypatch.setattr(auth_settings, "session_secret", google_fake.SESSION_SECRET)
+    monkeypatch.setattr(
+        auth_settings, "auth_allowed_emails", f"{google_fake.OWNER_EMAIL}, friend@example.com"
+    )
+    monkeypatch.setattr(auth_settings, "app_base_url", google_fake.BASE_URL)
+    monkeypatch.setattr(auth_settings, "render_external_url", "")
+    monkeypatch.setattr(auth_settings, "session_max_age_seconds", 8 * 60 * 60)
+    monkeypatch.setattr(auth_settings, "agent_credentials", "")
+    return auth_settings
+
+
+@pytest.fixture
+def google(monkeypatch, configured) -> google_fake.FakeGoogle:
+    fake = google_fake.FakeGoogle()
+    monkeypatch.setattr(auth_routes, "_http_transport", httpx2.MockTransport(fake.handler))
+    monkeypatch.setattr(auth_routes, "_clients", {})
+    return fake
+
+
+@pytest_asyncio.fixture
+async def google_client() -> AsyncGenerator[AsyncClient, None]:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url=google_fake.BASE_URL) as c:
+        yield c
+{% endif %}

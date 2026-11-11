@@ -1,0 +1,272 @@
+# Mirror of agentic_core/agent_context.py — keep in sync.
+# When editing one, edit the other. Re-extract to shared package in v2 (see R16).
+# App-specific exceptions, NOT mirrored: the `operations` key (from
+# app/cli/operations.py) and the auth text that depends on AUTH_PROVIDER.
+"""Agent-context introspection — emit the v1 envelope from this CLI's Typer app.
+
+Coding agents read `{{ app_name }} agent-context --json` once per session to
+discover every command, arg, option, and exit-code contract — without
+hard-coding command names in agent prompts.
+
+The shape is the agent-context v1 envelope::
+
+    {
+      "schema_version": 1,
+      "tool": "{{ app_name }}",
+      "version": "<__version__>",
+      "auth": {...},
+      "commands": [
+        {
+          "name": "<group> <command>",
+          "description": "<one-line help>",
+          "args": [...],
+          "options": [...],
+          "examples": []
+        },
+        ...
+      ],
+      "error_codes": [
+        {"code": 0, "meaning": "Success"},
+        ...
+      ]
+    }
+
+Per spec §B2, exit codes 0-5 are the contract every per-app CLI advertises.
+Walking ``app.registered_commands`` (top-level) and ``app.registered_groups``
+(sub-Typers, one level deep) mirrors ``agentic-core``'s own pattern —
+change here and in ``agentic_core/agent_context.py`` together until v2
+extracts a shared package (see R16).
+"""
+
+from __future__ import annotations
+
+import inspect
+from typing import Any
+
+import typer
+
+from app.cli import operations
+from app.cli.client import AUTH_PROVIDER
+
+
+# Fixed exit-code contract — keep aligned with `client.py`'s error mapping
+# and spec §B2 (0 success, 1 user, 2 auth, 3 server/app, 4 network, 5 misconfig).
+ERROR_CODES: list[dict[str, Any]] = [
+    {"code": 0, "meaning": "Success"},
+    {"code": 1, "meaning": "User error / invalid input"},
+    {"code": 2, "meaning": "Authentication failed"},
+    {"code": 3, "meaning": "Application or server error"},
+    {"code": 4, "meaning": "Network error"},
+    {"code": 5, "meaning": "Misconfiguration"},
+]
+
+
+# Slug glossary — mirrors ``agentic_core/agent_context.py`` SLUG_GLOSSARY.
+# Documents the three string shapes a slug morphs into inside the generated
+# app + the per-app envelope. Agents reading this CLI's agent-context
+# otherwise have to reverse-engineer the env-var prefix from looking at
+# the generated source. ``slug`` is the raw input, ``APP_UPPER`` is the
+# env-var prefix (used by ``client.py``'s ``_build_client`` and ``.env.example``),
+# and ``App-Name-Title`` is the human-readable form (README headings, Logto
+# application display name).
+SLUG_GLOSSARY: dict[str, str] = {
+    "slug": (
+        "Raw user-supplied identifier (e.g. ``{{ app_name }}``); lowercase, "
+        "matches ``^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$``. Used as the directory "
+        "name, GitHub repo name, {{ 'Render service name' if deploy_target == 'render' else 'Railway project name' }}, and Logto application "
+        "name."
+    ),
+    "APP_UPPER": (
+        "Underscored, uppercased form (e.g. ``{{ app_name.replace('-', '_').upper() }}``). "
+        "Used as the env-var prefix consumed by this CLI's ``client.py`` and "
+        "by ``.env.example`` / the FastAPI runtime config."
+    ),
+    "App-Name-Title": (
+        "Title-cased, hyphen-preserving form (e.g. "
+        "``{{ app_name.replace('-', ' ').title().replace(' ', '-') }}``). "
+        "Used in generated README headings and the Logto application display name."
+    ),
+}
+
+
+# Auth metadata — describes the machine credential + X-<APP_UPPER>-Actor-Sub model
+# and the env vars the CLI requires at runtime. Hand-curated (not derived
+# from code) so agents can check it against the code for drift, and the
+# values are stable across the CLI's command surface.
+{% set APP_UPPER = app_name.replace('-', '_').upper() %}
+{% set HEADER_NAME = 'X-' + app_name.replace('-', '_').upper() + '-Actor-Sub' %}
+_LOGTO_AUTH_INFO: dict[str, Any] = {
+    "provider": "logto_m2m",
+    "description": (
+        "Logto Machine-to-Machine. CLI mints an M2M JWT against the {{ app_name }} "
+        "API resource ({{ APP_UPPER }}_API_RESOURCE) using {{ APP_UPPER }}_M2M_APP_ID/"
+        "{{ APP_UPPER }}_M2M_APP_SECRET. Every request carries "
+        "{{ HEADER_NAME }}: <{{ APP_UPPER }}_USER_SUB> so writes land under that "
+        "user identity. Server-side middleware checks the actor sub against the "
+        "{{ APP_UPPER }}_M2M_ACTOR_SUBS allowlist ({{ 'Render' if deploy_target == 'render' else 'Railway' }} env on the {{ app_name }} "
+        "service). Callers need no extra wrapper — identity enforcement lives in "
+        "{{ app_name }} itself."
+    ),
+    "audit_log": None,
+    "required_env_vars": [
+        "{{ APP_UPPER }}_API_URL",
+        "{{ APP_UPPER }}_LOGTO_ENDPOINT",
+        "{{ APP_UPPER }}_API_RESOURCE",
+        "{{ APP_UPPER }}_M2M_APP_ID",
+        "{{ APP_UPPER }}_M2M_APP_SECRET",
+        "{{ APP_UPPER }}_USER_SUB",
+    ],
+}
+
+_AGENT_KEY_AUTH_INFO: dict[str, Any] = {
+    "provider": "agent_key",
+    "description": (
+        "App agent key (Google-auth apps). The CLI sends Authorization: Bearer "
+        "agk.<key_id>.<secret> and {{ HEADER_NAME }}: <{{ APP_UPPER }}_USER_SUB>. "
+        "The server stores only a hash of the key, binds it to one actor, and "
+        "enforces its scope (read by default; write needs a write-scoped key). "
+        "Google sign-in tokens are never accepted. Prefer "
+        "{{ APP_UPPER }}_AGENT_KEY_FILE (a 0600 file) over {{ APP_UPPER }}_AGENT_KEY. "
+        "Never print or read the key file into agent context."
+    ),
+    "audit_log": None,
+    "required_env_vars": [
+        "{{ APP_UPPER }}_API_URL",
+        "{{ APP_UPPER }}_USER_SUB",
+        "{{ APP_UPPER }}_AGENT_KEY_FILE or {{ APP_UPPER }}_AGENT_KEY",
+    ],
+}
+
+_UNSUPPORTED_AUTH_INFO: dict[str, Any] = {
+    "provider": "unsupported",
+    "description": (
+        f"No machine-to-machine auth for auth provider {AUTH_PROVIDER!r}. "
+        "Every data command exits 5 (machine_auth_not_supported)."
+    ),
+    "audit_log": None,
+    "required_env_vars": ["(none: machine auth is not supported)"],
+}
+
+AUTH_INFO: dict[str, Any] = {
+    "logto": _LOGTO_AUTH_INFO,
+    "google": _AGENT_KEY_AUTH_INFO,
+}.get(AUTH_PROVIDER, _UNSUPPORTED_AUTH_INFO)
+
+
+def generate(app: typer.Typer, version: str) -> dict[str, Any]:
+    """Introspect ``app`` and return a v1 agent-context dict.
+
+    Walks ``app.registered_commands`` (top-level) and ``app.registered_groups``
+    (sub-Typers, one level deep — matches ``agentic-core``'s tree shape).
+    For each command, separates positional args (no default) from options
+    (with default or boolean flag).
+    """
+    description = _app_description(app)
+    commands: list[dict[str, Any]] = []
+
+    for cmd in getattr(app, "registered_commands", []) or []:
+        commands.append(_command_info(cmd, prefix=""))
+
+    for group in getattr(app, "registered_groups", []) or []:
+        group_name = group.name or _callback_name(group.typer_instance)
+        sub_app = group.typer_instance
+        for cmd in getattr(sub_app, "registered_commands", []) or []:
+            commands.append(_command_info(cmd, prefix=group_name))
+
+    return {
+        "schema_version": 1,
+        "tool": "{{ app_name }}",
+        "version": version,
+        "cli": {
+            "name": app.info.name or "{{ app_name }}",
+            "version": version,
+            "description": description,
+        },
+        "auth": dict(AUTH_INFO),
+        "commands": commands,
+        "operations": operations.describe(),
+        "error_codes": list(ERROR_CODES),
+        "slug_glossary": dict(SLUG_GLOSSARY),
+    }
+
+
+def _app_description(app: typer.Typer) -> str:
+    info = getattr(app, "info", None)
+    if info is not None:
+        help_text = getattr(info, "help", None)
+        if help_text:
+            return help_text
+    return ""
+
+
+def _callback_name(sub_app: typer.Typer) -> str:
+    info = getattr(sub_app, "info", None)
+    if info is not None and getattr(info, "name", None):
+        return info.name
+    return ""
+
+
+def _command_info(cmd: Any, prefix: str = "") -> dict[str, Any]:
+    """Return one command's introspected schema entry."""
+    callback = getattr(cmd, "callback", None)
+    base_name = cmd.name or (callback.__name__ if callback else "")
+    if not cmd.name and base_name.endswith("_"):
+        base_name = base_name.rstrip("_")
+
+    full_name = f"{prefix} {base_name}".strip() if prefix else base_name
+
+    description = (cmd.help or "").strip()
+    if not description and callback and callback.__doc__:
+        description = inspect.cleandoc(callback.__doc__).splitlines()[0].strip()
+
+    args, options = _split_params(callback)
+
+    return {
+        "name": full_name,
+        "description": description,
+        "args": args,
+        "options": options,
+        "examples": [],
+    }
+
+
+def _split_params(callback: Any) -> tuple[list[str], list[str]]:
+    """Separate positional args from --options for a Typer callback."""
+    args: list[str] = []
+    options: list[str] = []
+    if callback is None:
+        return args, options
+
+    try:
+        signature = inspect.signature(callback)
+    except (TypeError, ValueError):
+        return args, options
+
+    for name, param in signature.parameters.items():
+        if param.annotation is typer.Context:
+            continue
+        if name in {"ctx", "context"} and param.annotation is inspect.Parameter.empty:
+            continue
+
+        default = param.default
+        default_cls = type(default).__name__ if default is not inspect.Parameter.empty else ""
+
+        if default_cls == "ArgumentInfo":
+            args.append(name)
+        elif default_cls == "OptionInfo":
+            options.append(_option_flag(name, default))
+        elif default is inspect.Parameter.empty:
+            args.append(name)
+        else:
+            options.append(f"--{name.replace('_', '-')}")
+
+    return args, options
+
+
+def _option_flag(name: str, option_info: Any) -> str:
+    """Pick a representative flag string for a typer.Option."""
+    decls = getattr(option_info, "param_decls", None) or ()
+    for decl in decls:
+        if isinstance(decl, str) and decl.startswith("--"):
+            return decl
+    return f"--{name.replace('_', '-')}"

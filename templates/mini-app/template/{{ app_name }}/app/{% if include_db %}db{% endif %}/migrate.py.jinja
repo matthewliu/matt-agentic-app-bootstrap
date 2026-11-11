@@ -1,0 +1,29 @@
+"""Run database migrations with no command-line arguments.
+
+Render's pre-deploy step for Docker services does not pass command
+arguments through to the process: `alembic -c <ini> upgrade head` arrives
+as a bare `alembic` and fails with "too few arguments". This entry point
+(`{{ app_name }}-migrate`) needs no arguments, so it runs the same upgrade on
+any host. Run it from the repo root (the Docker WORKDIR), where the
+relative `script_location` in alembic.ini resolves.
+"""
+
+import sys
+from pathlib import Path
+
+from alembic.config import main as alembic_main
+
+ALEMBIC_INI = Path("app/db/migrations/alembic.ini")
+
+
+def main() -> None:
+    if not ALEMBIC_INI.is_file():
+        sys.exit(
+            f"{{ app_name }}-migrate: {ALEMBIC_INI} not found in {Path.cwd()}. "
+            "Run from the repo root."
+        )
+    alembic_main(argv=["-c", str(ALEMBIC_INI), "upgrade", "head"])
+
+
+if __name__ == "__main__":
+    main()

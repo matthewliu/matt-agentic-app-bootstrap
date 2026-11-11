@@ -1,0 +1,68 @@
+{% if include_frontend %}
+# Stage 1: Build frontend (pnpm monorepo)
+# Exact patch tag: 22.23.4 or later carries the CA bundle fix for Render's
+# eMudhra CA advisory. A floating `22-slim` tag can resolve to an older image.
+FROM node:22.23.4-slim AS frontend-build
+
+WORKDIR /build
+
+# Install pnpm
+# pnpm 10 blocks dependency build scripts by default; the specific trusted
+# ones (esbuild) are approved via "pnpm.onlyBuiltDependencies" in package.json.
+# Pinned to the major for reproducible builds.
+RUN npm i -g pnpm@10
+
+{% if auth_provider == 'logto' %}# VITE_ vars must be present at build time (baked into the JS bundle)
+ARG VITE_LOGTO_ENDPOINT
+ARG VITE_LOGTO_APP_ID
+ARG VITE_LOGTO_API_RESOURCE
+{% else %}# Google sign-in needs no build-time values: the browser asks the backend.
+{% endif %}
+# Copy workspace config first (for layer caching). No committed pnpm-lock.yaml
+# is shipped by the scaffold, so the lockfile is generated at build time.
+COPY package.json pnpm-workspace.yaml .npmrc ./
+COPY frontend/package.json frontend/
+COPY shared/package.json shared/
+
+# Install dependencies. Keep this flag identical in .github/workflows/ci.yml
+# and mobile/eas.json: no committed pnpm-lock.yaml, and pnpm turns --frozen-lockfile ON by default when CI=true, so it must be disabled explicitly or the install dies with ERR_PNPM_NO_LOCKFILE. Commit a lockfile and flip these to --frozen-lockfile together.
+RUN pnpm install --no-frozen-lockfile
+
+# Copy source files
+COPY frontend/ frontend/
+COPY shared/ shared/
+
+# Symlink shared node_modules to frontend's for peer dep resolution (lesson #22)
+RUN cd shared && ln -s /build/frontend/node_modules node_modules
+
+# Build frontend
+RUN cd frontend && pnpm run build
+
+{% endif %}
+# Stage 2: Python runtime
+FROM python:3.12-slim
+
+# Refresh the system CA bundle for Render's eMudhra CA advisory. certifi has
+# a matching floor in pyproject.toml for Python's own TLS clients.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python dependencies
+COPY requirements.txt pyproject.toml ./
+COPY app/ app/
+RUN pip install --no-cache-dir .
+{% if include_frontend %}
+
+# Copy pre-built frontend from build stage
+COPY --from=frontend-build /build/frontend/dist frontend/dist
+{% endif %}
+
+# Run as non-root user
+RUN addgroup --system app && adduser --system --ingroup app app
+USER app
+
+EXPOSE 8080
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}

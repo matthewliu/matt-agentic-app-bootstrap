@@ -1,0 +1,261 @@
+"""Auth for {{ app_name }}: Google sign-in for people, agent keys for agents.
+
+Two kinds of caller reach the protected API, and they never mix:
+
+* **People** sign in with Google in a browser (app/routes/auth.py). The
+  backend keeps a signed, HttpOnly session cookie. No Google token reaches
+  the browser, and the backend keeps none after sign-in.
+* **Agents** (the per-app CLI and MCP server) send
+  `Authorization: Bearer agk.<id>.<secret>` plus the actor header. See
+  app/auth/agent_keys.py. A Google ID token, a Google access token, or a
+  Logto token is never accepted.
+
+`validate_token` decides every protected request in this order:
+
+1. 503 `auth_not_configured` while a required setting is missing or invalid
+   (see `missing_settings`). No request gets data, whatever it sends.
+2. If an Authorization header is present, it alone decides (agent key
+   checks). The session cookie is ignored on that request, with no fallback.
+3. Otherwise the session decides: 401 `not_authenticated`, 401
+   `session_expired`, 403 `not_allowed`, then 403 `csrf_failed` on writes.
+
+The name `validate_token` is kept so tests and app/auth/dependencies.py work
+the same way for every sign-in provider.
+"""
+
+import hmac
+import json
+import logging
+import secrets
+import time
+from datetime import UTC, datetime
+from typing import Any, NoReturn
+from urllib.parse import urlsplit
+
+from fastapi import Depends, HTTPException, Request
+
+from app.auth import agent_keys
+from app.config import auth_settings
+
+APP_SLUG = "{{ app_name }}"
+APP_UPPER = "{{ app_name | replace('-', '_') | upper }}"
+ACTOR_SUB_HEADER = f"x-{APP_UPPER}-actor-sub"
+CSRF_HEADER = "x-csrf-token"
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+MIN_SESSION_SECRET_LENGTH = 32
+LOCAL_HOSTS = {"localhost", "127.0.0.1"}
+# A session timestamp this far in the future is treated as forged or broken.
+CLOCK_SKEW_SECONDS = 60
+
+# Session keys. The session holds no Google token.
+SESSION_USER_ID = "uid"
+SESSION_EMAIL = "email"
+SESSION_AUTH_AT = "auth_at"
+SESSION_CSRF = "csrf"
+
+logger = logging.getLogger("app.auth.middleware")
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(_h)
+logger.setLevel(logging.INFO)
+
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+
+def base_url() -> str | None:
+    """The public origin, e.g. `https://my-app.onrender.com`, or None if invalid.
+
+    APP_BASE_URL wins; Render's RENDER_EXTERNAL_URL is the fallback. It must be
+    https, except http on localhost or 127.0.0.1 for local development, and it
+    must be an origin only (no path, query, or fragment). The redirect URI is
+    built from this value, never from the request's Host header.
+    """
+    raw = auth_settings.app_base_url.strip() or auth_settings.render_external_url.strip()
+    if not raw:
+        return None
+    try:
+        parts = urlsplit(raw.rstrip("/"))
+        parts.port  # noqa: B018 — raises ValueError for a port that is not a number
+    except ValueError:
+        return None
+    if not parts.hostname or parts.path or parts.query or parts.fragment:
+        return None
+    if parts.username or parts.password:
+        return None
+    if parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOCAL_HOSTS):
+        return f"{parts.scheme}://{parts.netloc.lower()}"
+    return None
+
+
+def allowed_emails() -> frozenset[str]:
+    return frozenset(
+        e.strip().lower() for e in auth_settings.auth_allowed_emails.split(",") if e.strip()
+    )
+
+
+def session_secret_ok() -> bool:
+    return len(auth_settings.session_secret.strip()) >= MIN_SESSION_SECRET_LENGTH
+
+
+def missing_settings() -> list[str]:
+    """Names of required settings that are missing or invalid. Empty = configured."""
+    missing = []
+    if not auth_settings.google_client_id.strip():
+        missing.append("GOOGLE_CLIENT_ID")
+    if not auth_settings.google_client_secret.strip():
+        missing.append("GOOGLE_CLIENT_SECRET")
+    if not session_secret_ok():
+        missing.append("SESSION_SECRET")
+    if not allowed_emails():
+        missing.append("AUTH_ALLOWED_EMAILS")
+    if base_url() is None:
+        missing.append("APP_BASE_URL")
+    # Zero or less would make the browser drop the cookie at once, so every
+    # sign-in would fail with no hint.
+    if auth_settings.session_max_age_seconds < 1:
+        missing.append("SESSION_MAX_AGE_SECONDS")
+    return missing
+
+
+def session_middleware_kwargs() -> dict[str, Any]:
+    """Arguments for Starlette's SessionMiddleware, read once at startup.
+
+    Without a valid SESSION_SECRET the middleware gets a random key for this
+    process only, never a constant, and every protected route returns 503.
+    On https the cookie is Secure and uses the `__Host-` prefix, which keeps
+    it on this exact host.
+    """
+    url = base_url()
+    https = bool(url and url.startswith("https://"))
+    return {
+        "secret_key": (
+            auth_settings.session_secret if session_secret_ok() else secrets.token_urlsafe(32)
+        ),
+        "session_cookie": "__Host-session" if https else "session",
+        "max_age": auth_settings.session_max_age_seconds,
+        "path": "/",
+        "same_site": "lax",
+        "https_only": https,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Decisions
+# ---------------------------------------------------------------------------
+
+
+def log_decision(*, auth_method: str, sub: Any, decision: str, key_id: str | None = None) -> None:
+    """One JSON line per decision. Never an email, a token, or a key."""
+    record = {
+        "configured_app_slug": APP_SLUG,
+        "auth_method": auth_method,
+        "sub": sub,
+        "decision": decision,
+    }
+    if key_id is not None:
+        record["agent_key_id"] = key_id
+    logger.info(json.dumps(record, default=str))
+
+
+def reject(status_code: int, reason: str, *, auth_method: str, sub: Any = None,
+           key_id: str | None = None) -> NoReturn:
+    log_decision(auth_method=auth_method, sub=sub, decision=f"{status_code}:{reason}",
+                 key_id=key_id)
+    raise HTTPException(status_code=status_code, detail=reason)
+
+
+def require_configured() -> None:
+    if missing_settings():
+        reject(503, "auth_not_configured", auth_method="none")
+
+
+def _agent_key_claims(request: Request, authorization: str) -> dict:
+    try:
+        claims = agent_keys.authenticate(
+            authorization=authorization,
+            actor_header=request.headers.get(ACTOR_SUB_HEADER),
+            method=request.method,
+            raw_credentials=auth_settings.agent_credentials,
+            now=datetime.now(UTC),
+        )
+    except agent_keys.AgentKeyRejected as exc:
+        reject(exc.status, exc.detail, auth_method="agent_key", key_id=exc.key_id)
+    log_decision(auth_method="agent_key", sub=claims["sub"], decision="200:ok_agent_key",
+                 key_id=claims["agent_key_id"])
+    return claims
+
+
+def session_claims(request: Request, *, check_csrf: bool) -> dict:
+    """Claims for the signed-in person, or raise. Clears a stale session."""
+    session = request.session
+    user_id = session.get(SESSION_USER_ID)
+    email = session.get(SESSION_EMAIL)
+    auth_at = session.get(SESSION_AUTH_AT)
+    csrf = session.get(SESSION_CSRF)
+    if not (
+        isinstance(user_id, str) and user_id
+        and isinstance(email, str) and email
+        and isinstance(auth_at, int)
+        and isinstance(csrf, str) and csrf
+    ):
+        reject(401, "not_authenticated", auth_method="session")
+
+    now = int(time.time())
+    if now - auth_at > auth_settings.session_max_age_seconds or auth_at > now + CLOCK_SKEW_SECONDS:
+        session.clear()
+        reject(401, "session_expired", auth_method="session", sub=user_id)
+    # Rechecked on every request, so removing an email ends that access at once.
+    if email not in allowed_emails():
+        session.clear()
+        reject(403, "not_allowed", auth_method="session", sub=user_id)
+    if check_csrf and request.method.upper() not in SAFE_METHODS:
+        sent = request.headers.get(CSRF_HEADER, "")
+        if not sent.isascii() or not hmac.compare_digest(sent, csrf):
+            reject(403, "csrf_failed", auth_method="session", sub=user_id)
+
+    return {
+        "sub": user_id,
+        "email": email,
+        "auth_method": "session",
+        "scopes": ["read", "write"],
+        "scope": "read write",
+    }
+
+
+# ---------------------------------------------------------------------------
+# FastAPI dependencies
+# ---------------------------------------------------------------------------
+
+
+async def validate_token(request: Request) -> dict:
+    """Authenticate a protected request. Returns claims; `sub` is the user ID."""
+    require_configured()
+    authorization = request.headers.get("authorization")
+    if authorization is not None:
+        return _agent_key_claims(request, authorization)
+    claims = session_claims(request, check_csrf=True)
+    log_decision(auth_method="session", sub=claims["sub"], decision="200:ok_session")
+    return claims
+
+
+async def get_current_user_id(claims: dict = Depends(validate_token)) -> str:
+    """The acting user's ID, `google:<sub>`, for a person or an agent key."""
+    return claims["sub"]
+
+
+def require_scope(required: str):
+    """Dependency factory for a per-route scope check (defense in depth)."""
+
+    async def _check(claims: dict = Depends(validate_token)) -> dict:
+        scopes = claims.get("scopes") or claims.get("scope", "").split()
+        if required not in scopes:
+            log_decision(auth_method=claims.get("auth_method", "unknown"),
+                         sub=claims.get("sub"), decision="403:insufficient_scope")
+            raise HTTPException(status_code=403, detail="Insufficient scope")
+        return claims
+
+    return _check

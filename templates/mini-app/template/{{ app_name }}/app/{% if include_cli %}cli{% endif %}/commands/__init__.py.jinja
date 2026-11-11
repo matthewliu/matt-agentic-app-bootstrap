@@ -1,0 +1,7 @@
+"""Subcommand modules for the `{{ app_name }}` CLI.
+
+Each module exposes a `typer.Typer` named ``app`` which the root CLI mounts
+via ``app.add_typer(...)``. Use one module per
+resource family, each command calls ``get_client()`` lazily so tests can
+``monkeypatch.setattr(<module>, "get_client", lambda: FakeClient(...))``.
+"""

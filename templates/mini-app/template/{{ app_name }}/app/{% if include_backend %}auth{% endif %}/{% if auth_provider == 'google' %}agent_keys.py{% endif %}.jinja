@@ -1,0 +1,310 @@
+"""Agent keys: the only machine credential this app accepts.
+
+Google sign-in is for people in a browser. Agents (the per-app CLI and MCP
+server) use an agent key that the operator creates for one person:
+
+    agk.<key_id>.<secret>
+
+* `secret` is 32 random bytes (43 URL-safe base64 characters, no padding).
+* The server stores only `sha256(secret)` in the AGENT_CREDENTIALS setting,
+  a JSON list of entries:
+
+      {"id": "<key_id>", "sha256": "<64 hex>", "actor": "google:<sub>",
+       "scopes": ["read"] or ["read", "write"],
+       "expires": "YYYY-MM-DDTHH:MM:SSZ"}      # expires is optional
+
+* A key acts only as its `actor`, the user ID that `GET /auth/session`
+  returns after that person signs in with Google. Every request must name
+  the same actor in the X-{{ app_name | replace('-', '_') | upper }}-Actor-Sub header.
+* `read` allows GET, HEAD, and OPTIONS. Writes need `write`.
+* A key stops working at its `expires` instant (UTC), or when its entry is
+  removed from AGENT_CREDENTIALS and the service restarts.
+
+The wire contract (formats, settings, and error strings) is shared with the
+CLI and MCP client. Change it only together with that client.
+
+Operator tool (never prints the key):
+
+    python -m app.auth.agent_keys new --id laptop-cli --actor google:1234 \\
+        --out laptop-cli.agent-key [--write] [--expires 2027-01-01T00:00:00Z]
+
+This module imports nothing from app.config, so the tool runs anywhere.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import hmac
+import json
+import os
+import re
+import secrets
+import sys
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+
+KEY_PREFIX = "agk"
+# Every pattern ends with \Z, not $: `$` also matches before a trailing newline.
+KEY_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}\Z")
+SECRET_RE = re.compile(r"^[A-Za-z0-9_-]{43}\Z")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}\Z")
+# Google `sub` values are ASCII, at most 255 characters, and in practice digits.
+ACTOR_RE = re.compile(r"^google:[A-Za-z0-9_-]{1,255}\Z")
+EXPIRES_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+EXPIRES_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
+ENTRY_FIELDS = {"id", "sha256", "actor", "scopes", "expires"}
+VALID_SCOPE_SETS = ({"read"}, {"read", "write"})
+READ_ONLY_METHODS = {"GET", "HEAD", "OPTIONS"}
+SECRET_BYTES = 32
+
+
+class AgentCredentialsInvalid(ValueError):
+    """AGENT_CREDENTIALS cannot be parsed or breaks a rule.
+
+    The message names the rule, never a hash or a key.
+    """
+
+
+class AgentKeyRejected(Exception):
+    """A machine request failed. `status` and `detail` go to the caller."""
+
+    def __init__(self, status: int, detail: str, key_id: str | None = None) -> None:
+        super().__init__(detail)
+        self.status = status
+        self.detail = detail
+        self.key_id = key_id
+
+
+@dataclass(frozen=True)
+class AgentCredential:
+    id: str
+    sha256: str
+    actor: str
+    scopes: frozenset[str]
+    expires: datetime | None
+
+
+def hash_secret(secret: str) -> str:
+    return hashlib.sha256(secret.encode("ascii")).hexdigest()
+
+
+def parse_expires(value: str) -> datetime:
+    """Parse the one accepted form, `YYYY-MM-DDTHH:MM:SSZ`, as a UTC instant."""
+    if not isinstance(value, str) or not EXPIRES_RE.match(value):
+        raise AgentCredentialsInvalid("expires must look like 2027-01-01T00:00:00Z")
+    try:
+        return datetime.strptime(value, EXPIRES_FORMAT).replace(tzinfo=UTC)
+    except ValueError as exc:
+        raise AgentCredentialsInvalid("expires is not a real date and time") from exc
+
+
+def parse_agent_credentials(raw: str) -> dict[str, AgentCredential]:
+    """Return the entries keyed by ID. An empty setting gives an empty dict.
+
+    Any malformed, duplicate, or unknown value rejects the whole list, so a
+    typo can never leave a half-applied key set.
+    """
+    if not raw or not raw.strip():
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        raise AgentCredentialsInvalid("AGENT_CREDENTIALS is not valid JSON") from exc
+    if not isinstance(data, list):
+        raise AgentCredentialsInvalid("AGENT_CREDENTIALS must be a JSON list")
+
+    by_id: dict[str, AgentCredential] = {}
+    seen_hashes: set[str] = set()
+    for index, entry in enumerate(data):
+        where = f"entry {index}"
+        if not isinstance(entry, dict):
+            raise AgentCredentialsInvalid(f"{where} is not an object")
+        unknown = set(entry) - ENTRY_FIELDS
+        if unknown:
+            raise AgentCredentialsInvalid(f"{where} has unknown fields {sorted(unknown)}")
+        key_id = entry.get("id")
+        digest = entry.get("sha256")
+        actor = entry.get("actor")
+        scopes = entry.get("scopes")
+        if not isinstance(key_id, str) or not KEY_ID_RE.match(key_id):
+            raise AgentCredentialsInvalid(f"{where} has a bad id")
+        if not isinstance(digest, str) or not SHA256_RE.match(digest):
+            raise AgentCredentialsInvalid(f"{where} sha256 must be 64 lowercase hex characters")
+        if not isinstance(actor, str) or not ACTOR_RE.match(actor):
+            raise AgentCredentialsInvalid(f"{where} actor must look like google:<sub>")
+        if (
+            not isinstance(scopes, list)
+            or not all(isinstance(s, str) for s in scopes)
+            or len(scopes) != len(set(scopes))
+            or set(scopes) not in VALID_SCOPE_SETS
+        ):
+            raise AgentCredentialsInvalid(f'{where} scopes must be ["read"] or ["read", "write"]')
+        expires = parse_expires(entry["expires"]) if "expires" in entry else None
+        if key_id in by_id:
+            raise AgentCredentialsInvalid(f"{where} repeats id {key_id!r}")
+        if digest in seen_hashes:
+            raise AgentCredentialsInvalid(f"{where} repeats the sha256 of another entry")
+        seen_hashes.add(digest)
+        by_id[key_id] = AgentCredential(
+            id=key_id,
+            sha256=digest,
+            actor=actor,
+            scopes=frozenset(scopes),
+            expires=expires,
+        )
+    return by_id
+
+
+# Compared against when the key ID is unknown, so both failure paths do the
+# same work before they return the same error.
+_UNKNOWN_ID_DIGEST = "0" * 64
+
+
+def authenticate(
+    *,
+    authorization: str,
+    actor_header: str | None,
+    method: str,
+    raw_credentials: str,
+    now: datetime,
+) -> dict:
+    """Check one machine request. Return claims or raise AgentKeyRejected.
+
+    The checks run in the order of the shared contract's error table.
+    """
+    if not raw_credentials or not raw_credentials.strip():
+        raise AgentKeyRejected(401, "machine_auth_not_configured")
+    try:
+        credentials = parse_agent_credentials(raw_credentials)
+    except AgentCredentialsInvalid as exc:
+        raise AgentKeyRejected(503, "agent_credentials_invalid") from exc
+    if not credentials:  # an empty JSON list configures no keys either
+        raise AgentKeyRejected(401, "machine_auth_not_configured")
+
+    scheme, _, token = authorization.partition(" ")
+    parts = token.strip().split(".") if scheme.lower() == "bearer" else []
+    if (
+        len(parts) != 3
+        or parts[0] != KEY_PREFIX
+        or not KEY_ID_RE.match(parts[1])
+        or not SECRET_RE.match(parts[2])
+    ):
+        raise AgentKeyRejected(401, "invalid_agent_credential")
+    key_id, secret = parts[1], parts[2]
+
+    entry = credentials.get(key_id)
+    expected = entry.sha256 if entry else _UNKNOWN_ID_DIGEST
+    matches = hmac.compare_digest(hash_secret(secret), expected)
+    if entry is None or not matches:
+        raise AgentKeyRejected(401, "invalid_agent_credential", key_id=key_id)
+    if entry.expires is not None and now >= entry.expires:
+        raise AgentKeyRejected(401, "agent_credential_expired", key_id=key_id)
+    if actor_header is None or not actor_header.strip():
+        raise AgentKeyRejected(403, "missing_actor_sub_header", key_id=key_id)
+    # The actor is not a secret, so a plain comparison is fine here (and
+    # compare_digest would raise on a non-ASCII header value).
+    if actor_header.strip() != entry.actor:
+        raise AgentKeyRejected(403, "actor_mismatch", key_id=key_id)
+    if method.upper() not in READ_ONLY_METHODS and "write" not in entry.scopes:
+        raise AgentKeyRejected(403, "missing_scope", key_id=key_id)
+
+    scopes = sorted(entry.scopes)
+    return {
+        "sub": entry.actor,
+        "auth_method": "agent_key",
+        "agent_key_id": entry.id,
+        "scopes": scopes,
+        "scope": " ".join(scopes),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Operator tool
+# ---------------------------------------------------------------------------
+
+
+def create_agent_key(
+    *, key_id: str, actor: str, write: bool, expires: str | None
+) -> tuple[str, dict]:
+    """Return (key, entry). The caller must store the key and discard it."""
+    if not KEY_ID_RE.match(key_id):
+        raise ValueError("id must match ^[a-z0-9][a-z0-9-]{0,31}$")
+    if not ACTOR_RE.match(actor):
+        raise ValueError("actor must look like google:<sub> (see GET /auth/session)")
+    entry: dict = {"id": key_id}
+    if expires is not None:
+        try:
+            when = parse_expires(expires)
+        except AgentCredentialsInvalid as exc:
+            raise ValueError(str(exc)) from exc
+        if when <= datetime.now(UTC):
+            raise ValueError("expires is in the past")
+    secret = secrets.token_urlsafe(SECRET_BYTES)
+    entry.update(
+        {
+            "sha256": hash_secret(secret),
+            "actor": actor,
+            "scopes": ["read", "write"] if write else ["read"],
+        }
+    )
+    if expires is not None:
+        entry["expires"] = expires
+    return f"{KEY_PREFIX}.{key_id}.{secret}", entry
+
+
+def write_key_file(path: Path, key: str) -> None:
+    """Create `path` with mode 0600. Refuse an existing file or a symlink."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        os.write(fd, (key + "\n").encode("ascii"))
+    finally:
+        os.close(fd)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m app.auth.agent_keys",
+        description=(
+            "Create an agent key. The key goes to a new 0600 file. stdout gets "
+            "only the file path and the public AGENT_CREDENTIALS entry."
+        ),
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+    new = sub.add_parser("new", help="create one agent key")
+    new.add_argument("--id", required=True, dest="key_id", help="key ID, e.g. laptop-cli")
+    new.add_argument("--actor", required=True, help="google:<sub> from GET /auth/session")
+    new.add_argument(
+        "--out", required=True, type=Path, help="new key file, e.g. laptop-cli.agent-key"
+    )
+    new.add_argument("--write", action="store_true", help="also allow writes (default: read only)")
+    new.add_argument("--expires", help="UTC instant, e.g. 2027-01-01T00:00:00Z")
+    args = parser.parse_args(argv)
+
+    try:
+        key, entry = create_agent_key(
+            key_id=args.key_id, actor=args.actor, write=args.write, expires=args.expires
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    try:
+        write_key_file(args.out, key)
+    except FileExistsError:
+        print(
+            f"error: {args.out} already exists (or is a symlink); choose a new path",
+            file=sys.stderr,
+        )
+        return 2
+    except OSError as exc:
+        print(f"error: cannot create {args.out}: {exc.strerror}", file=sys.stderr)
+        return 2
+    print(json.dumps({"key_file": str(args.out.resolve()), "entry": entry}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

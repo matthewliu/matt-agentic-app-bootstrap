@@ -1,0 +1,154 @@
+_subdirectory: template
+
+# Copier writes the answers file relative to the DESTINATION root. This
+# template renders into `{{ app_name }}/`, so the default (`.copier-answers.yml`
+# at the destination root) puts it one directory ABOVE the generated app — in
+# the shared parent that holds every sibling app, where each create-app run
+# overwrites the last one's answers. The generated repo then has no answers
+# file at all and `copier update` cannot run, so template fixes can never be
+# propagated to an existing app. Pin it inside the app instead.
+_answers_file: "{{ app_name }}/.copier-answers.yml"
+_skip_if_exists:
+  - ".env"
+  - ".claude/memory/MEMORY.md"
+
+# The project renders into the `{{ app_name }}/` subfolder, so each task
+# must run there. Without working_directory, `git init` and the venv land
+# in the parent folder and `pip install -e` finds no pyproject.toml.
+_tasks:
+  - command: "python3 -m venv .venv"
+    working_directory: "{{ app_name }}"
+  - command: ".venv/bin/pip install -e '.[dev]'"
+    working_directory: "{{ app_name }}"
+  - command: "git init"
+    working_directory: "{{ app_name }}"
+
+app_name:
+  type: str
+  help: "App name (lowercase, hyphens, e.g. 'habit-tracker')"
+  validator: "{% if not app_name | regex_search('^[a-z][a-z0-9-]*$') %}Must be lowercase with hyphens only{% endif %}"
+
+app_description:
+  type: str
+  help: "One-line description of what this app does"
+  default: "A mini-app"
+
+python_package_name:
+  type: str
+  default: "{{ app_name | replace('-', '_') }}"
+  help: "Python package name (underscores)"
+
+include_frontend:
+  type: bool
+  default: true
+  help: "Include Vite + React + Tailwind + shadcn/ui frontend?"
+
+# How people sign in. `google` renders server-side Google sign-in (OpenID
+# Connect) with a session cookie, plus operator-issued agent keys for the
+# per-app CLI and MCP server. `logto` is the legacy Logto setup. The default
+# stays `logto` because apps generated before this question have no recorded
+# answer, and `copier update` must keep their auth unchanged. The create-app
+# CLI passes the selected value explicitly.
+auth_provider:
+  type: str
+  default: "logto"
+  choices:
+    - "google"
+    - "logto"
+  help: "Sign-in provider — google (Google sign-in, new default) or logto (legacy)."
+
+include_mobile:
+  type: bool
+  default: "{{ include_frontend and auth_provider != 'google' }}"
+  help: "Include Expo React Native mobile app (requires frontend; not available with Google sign-in yet)"
+  validator: "{% if include_mobile and not include_frontend %}Mobile requires frontend (include_frontend must be true){% elif include_mobile and auth_provider == 'google' %}Mobile is not supported with Google sign-in yet (set include_mobile to false){% endif %}"
+
+github_user:
+  type: str
+  default: ""
+  help: "GitHub username (auto-detected from gh CLI if empty)"
+
+platform_domain:
+  type: str
+  default: "example.com"
+  help: "Logto only: your domain for API resource URLs (https://<app>.<domain>/api). create-app passes it."
+
+logto_endpoint:
+  type: str
+  default: "https://your-logto-instance.up.railway.app"
+  help: "Logto auth endpoint (no trailing slash)"
+
+# Where the app deploys. `railway` renders railway.json; `render` renders a
+# render.yaml Blueprint instead. The default stays `railway` because apps
+# generated before this question have no recorded answer, and `copier update`
+# must keep rendering railway.json for them. The create-app CLI resolves the
+# target and always passes it explicitly.
+deploy_target:
+  type: str
+  default: "railway"
+  choices:
+    - "render"
+    - "railway"
+  help: "Deploy target — render (render.yaml Blueprint) or railway (railway.json)."
+
+# ---------------------------------------------------------------------------
+# Variant + auth flags (added by agent-author-support / task #11 + #15).
+#
+# `variant` selects the overall app shape. `with_auth` is the opt-in toggle
+# for static-dashboard (full/lightweight-api always provision auth — for
+# them this flag is effectively ignored).
+#
+# Per R10's variant × invariant matrix, the per-app CLI (`app/cli/`) ships
+# whenever at least one of Invariants 1-3 applies — i.e. for every variant
+# EXCEPT `static-dashboard --no-auth`. The `include_cli` computed variable
+# below encodes that rule once so directory-name Jinja and file-level
+# `{% if include_cli %}` blocks stay consistent.
+# ---------------------------------------------------------------------------
+
+variant:
+  type: str
+  default: "full"
+  choices:
+    - "full"
+    - "lightweight-api"
+    - "static-dashboard"
+  help: "Template variant — full (FastAPI+frontend+mobile), lightweight-api (FastAPI only), or static-dashboard."
+
+with_auth:
+  type: bool
+  default: true
+  help: "Provision Logto auth (always true for full/lightweight-api; opt-in for static-dashboard)."
+
+with_db:
+  type: bool
+  default: "{{ variant != 'static-dashboard' }}"
+  help: "Provision Postgres (defaults true for full/lightweight-api; defaults false — opt-in — for static-dashboard)."
+
+# ---------------------------------------------------------------------------
+# Computed variables — derived from variant + opt-in flags above. Each has
+# `when: false` so Copier never prompts the user; the orchestrator and the
+# template's directory-name Jinja gates read these together.
+#
+# Pattern (task #11): wrap directory/file names with
+#   `{% if include_xxx %}name{% endif %}/`
+# so when the gate is false the directory name becomes empty and Copier
+# elides the entire subtree.
+# ---------------------------------------------------------------------------
+
+include_cli:
+  type: bool
+  default: "{{ not (variant == 'static-dashboard' and not with_auth) }}"
+  when: false  # computed — never prompted
+  help: "Whether to render the per-app CLI (app/cli/) — auto-derived from variant + with_auth per R10."
+
+include_backend:
+  type: bool
+  default: "{{ variant != 'static-dashboard' }}"
+  when: false  # computed — never prompted
+  help: "Whether to render the FastAPI backend (app/main.py, app/auth/, app/routes/, app/services/, app/models/) — false only for static-dashboard."
+
+include_db:
+  type: bool
+  default: "{{ with_db }}"
+  when: false  # computed — never prompted
+  help: "Whether to render app/db/ (engine + models + migrations) — alias for with_db; kept distinct so future variant rules can refine."

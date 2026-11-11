@@ -1,0 +1,163 @@
+# {{ app_name }}
+
+{{ app_description }}
+
+## Communication and documentation
+
+- Use plain English in all replies to the user. Lead with the answer or result.
+- Keep replies short. Add detail only when it helps the user decide or act, or when the user asks.
+- Use short sentences and active voice. Prefer familiar words and concrete verbs. Explain necessary technical terms once.
+- Omit filler, repeated summaries, jargon, and long accounts of your work.
+- Write all technical documentation in ASD-STE100-style Simplified Technical English. This includes README files, specs, runbooks, PR descriptions, and agent instructions.
+- Use one idea per sentence and one action per instruction. Use each term with one clear meaning.
+- Keep required facts, risks, and steps. Preserve exact code, commands, API names, and quoted text.
+
+## Tech Stack
+- **Backend:** Python 3.12 + FastAPI, SQLAlchemy 2.0 async, Alembic migrations
+- **Auth:** {% if auth_provider == 'google' %}Google sign-in (server-side OpenID Connect with Authlib) and a signed session cookie for people; agent keys for the CLI and MCP server{% else %}Logto JWT middleware (ES384, JWKS caching){% endif %}
+- **Database:** PostgreSQL (production), SQLite/aiosqlite (testing)
+{% if include_frontend %}- **Frontend:** Vite + React + TypeScript + Tailwind CSS + shadcn/ui. Read `DESIGN.md` before UI work; all design values live in `frontend/src/design/tokens.ts`.
+{% endif %}{% if include_mobile %}- **Mobile:** Expo SDK 52 + React Native + Expo Router + @logto/rn
+- **Monorepo:** pnpm workspaces (frontend, mobile, shared)
+{% endif %}
+## Commands
+```bash
+uvicorn app.main:app --reload      # Backend dev server
+pytest                              # Run tests
+ruff check .                        # Lint
+{% if include_db %}docker compose up -d db && {{ app_name }}-migrate  # Local Postgres, then alembic migrations (reads .env)
+{% endif %}{% if include_frontend %}cd frontend && pnpm run dev           # Frontend dev server
+cd frontend && pnpm test            # Frontend tests
+cd frontend && npx tsc --noEmit     # Type-check (MUST pass before deploy)
+npx shadcn@latest add button card input badge dialog dropdown-menu  # Add UI components
+{% endif %}{% if include_mobile %}npx expo start                       # Mobile dev server (from mobile/)
+npx expo start --clear               # Mobile dev (after changing EXPO_PUBLIC_* vars)
+eas build --profile preview --platform ios  # Build for device testing (install eas-cli first: npm i -g eas-cli)
+{% endif %}```
+
+## Architecture
+| Directory | Purpose |
+|-----------|---------|
+| `app/routes/` | Thin route handlers — delegate to services |
+| `app/models/` | Pydantic request/response schemas |
+| `app/services/` | Business logic (DB session via DI) |
+| `app/db/` | SQLAlchemy engine, ORM models, Alembic |
+| `app/auth/` | {% if auth_provider == 'google' %}Session and agent key checks (`middleware.py`, `agent_keys.py`){% else %}JWT validation{% endif %}, `get_current_user_id`, `get_or_create_user_profile` |
+| `app/config.py` | Pydantic Settings (env vars / .env) |
+{% if include_cli %}| `app/cli/`{% if include_backend %}, `app/mcp_server/`{% endif %} | Per-app CLI{% if include_backend %} and stdio MCP server (`{{ app_name }}-mcp`){% endif %}. `cli/operations.py` holds the shared typed operations; `cli/client.py` is the only HTTP client |
+{% endif %}{% if include_frontend %}| `frontend/` | Vite + React SPA with {% if auth_provider == 'google' %}Google sign-in through the backend (`src/auth.tsx`){% else %}Logto auth{% endif %} |
+{% endif %}{% if include_mobile %}| `mobile/` | Expo + React Native mobile app |
+| `shared/` | Shared TS types + API client (peerDeps for react) |
+{% endif %}
+## Key Patterns
+- **Auth:** Routes use `Depends(get_or_create_user_profile)` for user context. `require_scope()` exists but is not wired — **TODO: add scope enforcement before production**
+{% if auth_provider == 'google' %}- **Google sign-in:** The backend runs the whole sign-in (`app/routes/auth.py`). The browser holds only an HttpOnly session cookie. Never add a Google token, an agent key, or `localStorage` auth state to the frontend. Writes from the browser send `X-CSRF-Token`; requests with an `Authorization` header are agent-key requests and skip the cookie.
+- **Agent keys:** `python -m app.auth.agent_keys new --id <id> --actor google:<sub> --out <id>.agent-key` writes the key to a new 0600 file and prints only the public entry for `AGENT_CREDENTIALS`. Never print, `cat`, or paste a key file into a chat or a log.
+{% endif %}- **User identity:** UserProfile auto-provisions on first authenticated request. Timezone syncs from browser once (UTC → real timezone)
+- **Item isolation:** All item queries filter by `user_id` — users only see their own data
+- **Service layer:** Routes delegate to `app/services/` — keep routes thin
+{% if include_cli and include_backend %}- **Agent surface:** Every feature must work for people and agents. Each route's `operation_id` is a public name shared with `app/cli/operations.py`, the CLI, and the MCP server. To expose a route to agents, add an `Operation`, a CLI command, and (only if agents need it) an MCP tool. Write tools stay behind `{{ app_name.replace('-', '_').upper() }}_MCP_ALLOW_WRITES`; delete is never an MCP tool. The CLI and MCP server reach data only through the HTTP API, never the database. See README "CLI and MCP Server"
+{% endif %}- **Config:** All settings via `app.config.settings` — never read env vars directly
+- **Timezone:** Frontend sends `X-Timezone` header (useApi hook). If you rename this header, update: `useApi.ts`, `main.py` CORS, `dependencies.py`
+- **Eager loading:** Every query that feeds a `*_to_response()` function MUST use `selectinload()` for all relationships. Missing eager loads cause empty arrays silently — no error, no warning
+{% if deploy_target == 'render' %}
+## Deployment (Render)
+- `render.yaml` is a Render Blueprint. It is the only deploy definition. Do not create services by hand. First deploy: open `https://render.com/deploy?repo=<github-url>`, or use New > Blueprint in the dashboard. If no deploy starts, start one manual deploy.
+- A `render.yaml` change merged to `main` syncs to the live services. Deploys wait for CI (`autoDeployTrigger: checksPass`).
+{% if include_db %}- Migrations run as the pre-deploy command (`{{ app_name }}-migrate`, which runs `alembic upgrade head` with no arguments; Render drops pre-deploy arguments on Docker services). The database accepts no external connections (`ipAllowList: []`). For manual database work, use the service Shell tab or `render ssh`.
+{% endif %}{% if include_backend %}- {% if auth_provider == 'google' %}Sign-in uses Google. Until `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `AUTH_ALLOWED_EMAILS` are set on the service, protected routes return 503 `auth_not_configured`. Render generates `SESSION_SECRET`. `/health` returns 200. Setup steps: README, section "Google sign-in".{% else %}Auth is not configured. Protected routes return 503 `auth_not_configured` until a follow-up `agentic-core` auth command provisions Logto. `/health` returns 200.{% endif %}
+{% endif %}- Never add CLI-only secrets to `render.yaml`. Render passes every service env var to the Docker build.
+{% endif %}{% if include_frontend %}{% if deploy_target == 'railway' %}
+## Deployment (Railway)
+
+### How it works
+1. **Dockerfile** handles Python+Node (Railpack can't do multi-language). Multi-stage: Node builds frontend, Python serves it
+2. **VITE_* vars** are build-time only — must be set as Railway env vars BEFORE deploying. Missing vars = auth silently broken. Railway auto-forwards env vars matching Dockerfile `ARG` names
+3. **SPA routing:** Catch-all route returns `index.html` for all non-API routes (React Router handles client-side)
+4. **CMD** uses shell form (`CMD uvicorn ... --port ${PORT:-8080}`) — exec form won't substitute `$PORT`
+5. **CORS_ORIGINS** must include your Railway domain after first deploy
+6. **Two Logto apps:** Traditional Web (backend server-side) + SPA (frontend PKCE). Both created by bootstrap script
+7. **Database:** Alembic manages schema via `railway.json` preDeployCommand. Remove `AUTO_CREATE_TABLES=1` before production
+{% endif %}
+### CRITICAL: tsc errors block {% if deploy_target == 'railway' %}Railway {% endif %}deploys
+`npm run build` runs `tsc && vite build`. TypeScript strict mode (`noUnusedLocals`, `noUnusedParameters` in tsconfig.json) will fail the ENTIRE Docker build for:
+- **Unused imports** — e.g., importing a hook you don't call
+- **Unused destructured params** — e.g., `{ type, value, label, preview }` where `preview` isn't used in the function body
+- **Missing/wrong prop types** — e.g., shadcn component version mismatches where `asChild` doesn't exist on the type
+
+**Before every deploy, run:** `cd frontend && npx tsc --noEmit` to catch errors locally.
+These errors are invisible during `npm run dev` (Vite doesn't run tsc) — they only surface in the Docker build.
+{% if deploy_target == 'railway' %}
+### Railway CVE scanner
+Railway's security scanner checks `pnpm-lock.yaml` (or `package-lock.json`) for CVEs BEFORE building. It blocks deploys for ANY vulnerable package — including transitive dev-only dependencies that never reach the production Docker image.
+
+If Railway blocks a deploy for a CVE:
+1. Check Railway build logs for the package name
+2. Run `pnpm ls <package>` (or `npm ls <package>`) to find the dependency chain
+3. Add a `pnpm.overrides` (or `overrides`) entry in the root `package.json`
+4. Run `pnpm install` to regenerate the lockfile
+5. Redeploy
+{% endif %}
+### Type sync contract
+When adding fields to backend Pydantic models, update in THREE places:
+1. `app/models/` — Backend Pydantic model
+2. `shared/types/api.ts` (if monorepo) or `frontend/src/types/` — TypeScript interface
+3. Frontend test fixtures that use those types
+
+The Dockerfile's `tsc` step catches (2) and (3) on deploy — but catching it there wastes a deploy cycle.
+{% endif %}{% if include_mobile %}
+## Mobile Development Process
+
+Before implementing ANY mobile screen, open the corresponding web page and match every visual detail.
+
+- `EXPO_PUBLIC_*` vars are in `eas.json` env blocks and `mobile/.env` — NOT {{ 'Render' if deploy_target == 'render' else 'Railway' }} env vars
+- After changing `EXPO_PUBLIC_*` vars, restart Metro with `npx expo start --clear`
+- Use `@expo/vector-icons/Ionicons` for icons (not SVG components)
+- Do NOT add `react-native-svg`, `react-native-keyboard-controller`, or `expo-dev-client`
+
+### If EAS Build Fails
+- **Apple developer account:** Must be configured in EAS (run `eas credentials`)
+- **Bundle ID conflict:** If `com.agenticapps.{{ app_name | lower | replace('-', '') | replace('_', '') }}` is taken, change in `app.json`
+- **Missing EXPO_PUBLIC_* values:** Check `eas.json` env blocks — placeholders must be replaced with real values
+- **pnpm resolution error:** Run `pnpm install` from monorepo root to regenerate lockfile
+{% endif %}
+## Environment Variables
+See `.env.example`. Key ones:
+- `DATABASE_URL` — PostgreSQL connection ({% if deploy_target == 'render' %}`render.yaml` sets it from the `{{ app_name }}-db` database{% else %}create-app sets it on the Railway service as a reference to the Postgres service{% endif %})
+{% if auth_provider == 'google' %}- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — this app's own Google OAuth client
+- `SESSION_SECRET` — signs the session cookie (at least 32 characters)
+- `AUTH_ALLOWED_EMAILS` — who may sign in; empty means nobody
+- `APP_BASE_URL` — public origin; on Render it defaults to `RENDER_EXTERNAL_URL`
+- `AGENT_CREDENTIALS` — JSON list of agent key hashes
+- The Google and agent key settings load only from this app's `.env` and the process environment, never from `~/.agentic-apps.env`
+{% else %}- `LOGTO_ENDPOINT` / `LOGTO_APP_ID` / `LOGTO_APP_SECRET` — Auth credentials
+- `LOGTO_API_RESOURCE` — API resource identifier for token audience
+{% endif %}- `CORS_ORIGINS` — Comma-separated allowed origins{% if deploy_target == 'render' %}. Leave it unset on Render: the app then allows only `RENDER_EXTERNAL_URL`{% endif %}
+{% if include_frontend and auth_provider == 'logto' %}- `VITE_LOGTO_APP_ID` / `VITE_LOGTO_ENDPOINT` / `VITE_LOGTO_API_RESOURCE` — Frontend auth (in `frontend/.env`)
+{% endif %}
+## Agentic Core (Sibling Repo)
+
+This app was bootstrapped from the `agentic-core` checkout that created it (by default the sibling folder `../agentic-core/`). That repo holds:
+- **Bootstrap CLI** (`agentic-core create-app`) — the tool that created this app
+{% if auth_provider == 'google' %}- **Resume** — re-run `agentic-core create-app <slug> --resume` from the parent dir to pick up where a previous run left off
+{% else %}- **Logto Management API client** (`agentic_core/bootstrap/logto.py`) — can be invoked from Python to re-register or update this app's Logto config; or re-run `agentic-core create-app <slug> --resume` from the parent dir to pick up where a previous run left off
+{% endif %}- **Deployment lessons** (`docs/lessons-mobile-deployment.md`) — 24 hard-won lessons from prior apps. Read this before debugging deploy issues.
+{% if deploy_target == 'render' and auth_provider == 'google' %}- **No shared credentials** — Google sign-in and agent key settings never load from `~/.agentic-apps.env`. Keep them in this app's `.env` or on the Render service.
+{% elif deploy_target == 'render' %}- **Shared credentials** (`~/.agentic-apps.env`, chmod 600) — `LOGTO_ENDPOINT` / `LOGTO_M2M_APP_ID` / `LOGTO_M2M_APP_SECRET` for the Logto Management API, shared by all sibling apps. Do NOT copy them into this repo's `.env`. `app/config.py` auto-loads this file and the local `.env` (local `.env` wins).
+{% elif auth_provider == 'google' %}- **No shared credentials** — Google sign-in and agent key settings never load from `~/.agentic-apps.env`. Keep them in this app's `.env` or on the Railway service.
+{% else %}
+### Shared Platform Credentials
+
+Logto Management API and Railway API tokens live in `~/.agentic-apps.env` (chmod 600). This file is shared across all sibling apps — do NOT duplicate these credentials into this repo's `.env`.
+
+Available credentials:
+- `LOGTO_ENDPOINT` / `LOGTO_M2M_APP_ID` / `LOGTO_M2M_APP_SECRET` — Logto Management API (create/delete apps, manage roles, scopes, API resources)
+- `RAILWAY_API_TOKEN` — Railway API (manage services, env vars, deployments)
+
+`app/config.py` auto-loads both `~/.agentic-apps.env` and local `.env` via pydantic-settings (local `.env` wins on conflicts). No manual `load_dotenv` needed for app code — just use `from app.config import settings`.
+{% endif %}
+## Conventions
+- One resource = one route file + one model file + one service file
+- Pydantic models: `*Create`, `*Update`, `*Response`
+- HTTP status codes: 201 (create), 204 (delete), 404 (not found), 422 (validation)
+- Test files mirror source: `tests/unit/test_<module>.py`

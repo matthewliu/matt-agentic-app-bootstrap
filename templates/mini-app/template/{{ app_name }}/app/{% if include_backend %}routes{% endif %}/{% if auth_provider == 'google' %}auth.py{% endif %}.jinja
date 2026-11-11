@@ -1,0 +1,209 @@
+"""Google sign-in routes (OpenID Connect authorization code flow with PKCE).
+
+GET  /auth/login     start sign-in; `next` is a path on this app
+GET  /auth/callback  Google returns here; the backend checks the ID token
+GET  /auth/session   who is signed in, plus the CSRF token for writes
+POST /auth/logout    end the session (needs the CSRF token)
+
+Every route returns 503 `auth_not_configured` while a required setting is
+missing. Authlib makes the `state`, `nonce`, and PKCE values and keeps them
+in the session cookie between /auth/login and /auth/callback.
+"""
+
+import logging
+import secrets
+import time
+from urllib.parse import urlencode, urlsplit
+
+import httpx2
+from authlib.integrations.starlette_client import OAuth
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+{% if include_frontend %}
+from fastapi.responses import RedirectResponse
+{% else %}
+from fastapi.responses import JSONResponse, RedirectResponse
+{% endif %}
+
+from app.auth import middleware as auth
+from app.config import auth_settings
+
+GOOGLE_DISCOVERY_URL = "https://accounts.google.com/.well-known/openid-configuration"
+# Google documents both forms of the ID token `iss` claim.
+GOOGLE_ISSUERS = ["https://accounts.google.com", "accounts.google.com"]
+# Least privilege: `openid` for the ID token, `email` for the allowlist.
+GOOGLE_SCOPES = "openid email"
+CALLBACK_PATH = "/auth/callback"
+{% if include_frontend %}
+LOGIN_PAGE = "/login"
+{% endif %}
+HTTP_TIMEOUT_SECONDS = 10
+
+logger = logging.getLogger("app.auth.middleware")
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Tests replace this with an httpx2.MockTransport that plays Google, so no
+# test reaches the network. It stays None in a running app. Authlib uses
+# httpx2 whenever it is installed, and pyproject.toml always installs it.
+_http_transport: httpx2.AsyncBaseTransport | None = None
+_clients: dict[tuple[str, str], object] = {}
+
+
+def _google():
+    """The Authlib client for the configured Google OAuth client."""
+    key = (auth_settings.google_client_id, auth_settings.google_client_secret)
+    client = _clients.get(key)
+    if client is None:
+        client_kwargs: dict = {
+            "scope": GOOGLE_SCOPES,
+            "code_challenge_method": "S256",
+            "timeout": HTTP_TIMEOUT_SECONDS,
+        }
+        if _http_transport is not None:
+            client_kwargs["transport"] = _http_transport
+        oauth = OAuth()
+        client = oauth.register(
+            name="google",
+            client_id=key[0],
+            client_secret=key[1],
+            server_metadata_url=GOOGLE_DISCOVERY_URL,
+            client_kwargs=client_kwargs,
+        )
+        _clients.clear()
+        _clients[key] = client
+    return client
+
+
+def safe_next(value: str | None) -> str:
+    """A same-app path to return to after sign-in, else `/`.
+
+    Accepts only a path that starts with one `/`. Rejects `//host`, `/\\host`
+    (browsers treat `\\` as `/`), schemes, and control characters.
+    """
+    if not value or not value.startswith("/") or len(value) > 2048:
+        return "/"
+    if value[1:2] in ("/", "\\") or "\\" in value:
+        return "/"
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        return "/"
+    parts = urlsplit(value)
+    if parts.scheme or parts.netloc:
+        return "/"
+    return value
+
+
+def _sign_in_failed(request: Request, code: str, status_code: int = 401) -> Response:
+    """End the attempt with a fixed code. Never echo Google's error text."""
+    request.session.clear()
+    auth.log_decision(auth_method="google", sub=None, decision=f"{status_code}:{code}")
+{% if include_frontend %}
+    return RedirectResponse(f"{LOGIN_PAGE}?{urlencode({'error': code})}", status_code=302)
+{% else %}
+    return JSONResponse(status_code=status_code, content={"detail": code})
+{% endif %}
+
+
+def _audience_ok(aud: object, client_id: str) -> bool:
+    if isinstance(aud, str):
+        return aud == client_id
+    return isinstance(aud, list) and aud == [client_id]
+
+
+@router.get("/login")
+async def login(request: Request, next: str | None = None, hop: str | None = None):
+    auth.require_configured()
+    base = auth.base_url()
+    target = safe_next(next)
+    # The state cookie must live on the same host as the callback, so start
+    # sign-in on the configured host. The target comes from configuration,
+    # never from the Host header. `hop` stops a redirect loop when a proxy
+    # rewrites the Host header so that it can never match.
+    if request.url.netloc.lower() != urlsplit(base).netloc:
+        if hop:
+            raise HTTPException(status_code=400, detail="base_url_host_mismatch")
+        return RedirectResponse(
+            f"{base}/auth/login?{urlencode({'next': target, 'hop': '1'})}", status_code=302
+        )
+    # Keep a signed-in session until the callback succeeds, so a link from
+    # another site to this route cannot sign the user out. The callback
+    # replaces the whole session.
+    request.session["next"] = target
+    try:
+        return await _google().authorize_redirect(
+            request, f"{base}{CALLBACK_PATH}", prompt="select_account"
+        )
+    except Exception as exc:  # noqa: BLE001 — e.g. Google discovery is unreachable
+        logger.info('{"decision": "login_error", "error_type": "%s"}', type(exc).__name__)
+        return _sign_in_failed(request, "login_failed")
+
+
+@router.get("/callback")
+async def callback(request: Request):
+    auth.require_configured()
+    client_id = auth_settings.google_client_id
+    try:
+        token = await _google().authorize_access_token(
+            request,
+            claims_options={
+                "iss": {"essential": True, "values": GOOGLE_ISSUERS},
+                "aud": {"essential": True, "value": client_id},
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 — every failure here must end as login_failed
+        # Wrong or missing state, a provider error, a bad signature, a wrong
+        # issuer, an expired token, a nonce mismatch, or a network failure.
+        logger.info('{"decision": "callback_error", "error_type": "%s"}', type(exc).__name__)
+        return _sign_in_failed(request, "login_failed")
+
+    claims = token.get("userinfo") if isinstance(token, dict) else None
+    if not claims:
+        return _sign_in_failed(request, "login_failed")
+    # Authlib accepts any `aud` list that contains the client ID. Require
+    # exactly the client ID, or a one-item list of it.
+    if not _audience_ok(claims.get("aud"), client_id) or claims.get("iss") not in GOOGLE_ISSUERS:
+        return _sign_in_failed(request, "login_failed")
+    sub = claims.get("sub")
+    email = claims.get("email")
+    if not isinstance(sub, str) or not sub or not isinstance(email, str) or "@" not in email:
+        return _sign_in_failed(request, "login_failed")
+    if claims.get("email_verified") is not True:
+        return _sign_in_failed(request, "email_not_verified", 403)
+    email = email.strip().lower()
+    if email not in auth.allowed_emails():
+        return _sign_in_failed(request, "not_allowed", 403)
+
+    target = safe_next(request.session.get("next"))
+    # A new session for every sign-in. The Google tokens are dropped here.
+    request.session.clear()
+    request.session.update(
+        {
+            auth.SESSION_USER_ID: f"google:{sub}",
+            auth.SESSION_EMAIL: email,
+            auth.SESSION_AUTH_AT: int(time.time()),
+            auth.SESSION_CSRF: secrets.token_urlsafe(32),
+        }
+    )
+    auth.log_decision(auth_method="google", sub=f"google:{sub}", decision="302:signed_in")
+    return RedirectResponse(target, status_code=302)
+
+
+@router.get("/session")
+async def current_session(request: Request, claims: dict = Depends(auth.validate_token)):
+    """The caller's identity. People also get the CSRF token for writes."""
+    body = {"user_id": claims["sub"], "auth_method": claims["auth_method"],
+            "scopes": claims["scopes"]}
+    if claims["auth_method"] == "session":
+        body["email"] = claims.get("email")
+        body["csrf_token"] = request.session.get(auth.SESSION_CSRF)
+    return body
+
+
+@router.post("/logout", status_code=204)
+async def logout(request: Request):
+    auth.require_configured()
+    if request.headers.get("authorization") is not None:
+        raise HTTPException(status_code=400, detail="logout_is_for_browser_sessions")
+    if request.session.get(auth.SESSION_USER_ID):
+        # Needs the CSRF token, so another site cannot sign the user out.
+        auth.session_claims(request, check_csrf=True)
+    request.session.clear()
+    return Response(status_code=204)

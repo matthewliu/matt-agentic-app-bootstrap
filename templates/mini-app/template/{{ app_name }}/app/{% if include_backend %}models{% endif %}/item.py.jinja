@@ -1,0 +1,31 @@
+"""Pydantic models for item request/response validation."""
+
+import datetime
+
+from pydantic import BaseModel, Field
+
+
+class ItemCreate(BaseModel):
+    """Request body for creating an item."""
+
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+
+
+class ItemUpdate(BaseModel):
+    """Request body for updating an item. All fields optional."""
+
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+
+
+class ItemResponse(BaseModel):
+    """Response body for an item."""
+
+    id: str
+    name: str
+    description: str | None
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+
+    model_config = {"from_attributes": True}

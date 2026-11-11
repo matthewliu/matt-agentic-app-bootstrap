@@ -1,0 +1,129 @@
+"""No-auth lockout: with no Logto app configured, protected routes return no data.
+
+These tests run the REAL `validate_token` dependency. `tests/conftest.py`
+replaces it with mock claims for every other test, so each test here removes
+that override first.
+"""
+
+import base64
+import json
+import time
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from app.auth import middleware
+from app.auth.middleware import validate_token
+from app.config import settings
+from app.main import app
+
+
+def _unsigned_token() -> str:
+    """A well-formed JWT whose signature segment no key produced."""
+
+    def _b64u(obj: dict) -> str:
+        raw = json.dumps(obj, separators=(",", ":")).encode()
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    now = int(time.time())
+    header = _b64u({"alg": "ES384", "kid": "kid-unsigned", "typ": "JWT"})
+    payload = _b64u(
+        {
+            "iss": f"{settings.logto_endpoint}/oidc",
+            "aud": settings.logto_api_resource,
+            "sub": "someone",
+            "iat": now,
+            "exp": now + 300,
+            "scope": "read write",
+        }
+    )
+    return f"{header}.{payload}.AAAA"
+
+
+@pytest.fixture
+def jwks_calls(monkeypatch) -> list[int]:
+    """Use the real auth dependency and record every JWKS fetch attempt."""
+    monkeypatch.delitem(app.dependency_overrides, validate_token, raising=False)
+    calls: list[int] = []
+
+    def _fake_fetch() -> dict:
+        calls.append(1)
+        return {"keys": []}
+
+    monkeypatch.setattr(middleware, "_fetch_jwks", _fake_fetch)
+    middleware._reset_jwks_cache_for_tests()
+    return calls
+
+
+@pytest.fixture
+def auth_not_configured(monkeypatch, jwks_calls) -> list[int]:
+    """Both Logto app IDs empty, whatever the local env files say."""
+    monkeypatch.setattr(settings, "logto_app_id", "")
+    monkeypatch.setattr(settings, "logto_m2m_agent_app_id", "")
+    return jwks_calls
+
+
+@pytest.fixture
+async def client():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+@pytest.mark.asyncio
+async def test_health_returns_200(auth_not_configured, client: AsyncClient):
+    response = await client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_no_token_returns_503(auth_not_configured, client: AsyncClient):
+    response = await client.get("/api/items")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "auth_not_configured"}
+
+
+@pytest.mark.asyncio
+async def test_unsigned_token_returns_503_without_jwks_fetch(
+    auth_not_configured, client: AsyncClient
+):
+    response = await client.get(
+        "/api/items", headers={"Authorization": f"Bearer {_unsigned_token()}"}
+    )
+    assert response.status_code == 503
+    assert response.json() == {"detail": "auth_not_configured"}
+    assert auth_not_configured == []
+
+
+@pytest.mark.asyncio
+async def test_write_route_returns_503(auth_not_configured, client: AsyncClient):
+    response = await client.post("/api/items", json={"name": "should not land"})
+    assert response.status_code == 503
+    assert response.json() == {"detail": "auth_not_configured"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("app_id", "m2m_id"),
+    [("spa-app-id", ""), ("", "m2m-app-id"), ("spa-app-id", "m2m-app-id")],
+    ids=["spa-only", "m2m-only", "both"],
+)
+async def test_configured_auth_keeps_token_checks(
+    monkeypatch, jwks_calls, client: AsyncClient, app_id: str, m2m_id: str
+):
+    """With either app ID set, the existing 401 checks run as before."""
+    monkeypatch.setattr(settings, "logto_app_id", app_id)
+    monkeypatch.setattr(settings, "logto_m2m_agent_app_id", m2m_id)
+
+    missing = await client.get("/api/items")
+    assert missing.status_code == 401
+    assert missing.json() == {"detail": "missing_bearer"}
+
+    # An unsigned token now reaches the signature check, which needs the JWKS.
+    unsigned = await client.get(
+        "/api/items", headers={"Authorization": f"Bearer {_unsigned_token()}"}
+    )
+    assert unsigned.status_code == 401
+    assert unsigned.json() == {"detail": "invalid_signature"}
+    assert jwks_calls == [1]

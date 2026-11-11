@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# Environment variables (Invariant 8 — long-lived secrets live in Railway
+# or in the encrypted keystore, never in the repo)
+.env
+.env.local
+
+# Encrypted keystores never belong in an app repo. Ignore any that land here.
+*.keystore.json
+{% if auth_provider == 'google' %}
+# Agent key files from `python -m app.auth.agent_keys new --out <id>.agent-key`.
+# Each holds a usable secret; never commit one.
+*.agent-key
+{% endif %}
+# Editor / script backups (atomic-write sidecars, *.bak, *.bak.YYYY-MM-DD, …)
+*.bak*
+*.last-good
+
+# Bootstrap checkpoint (R8 — resource IDs + provisioning markers; secrets
+# never persisted to this file, but it's scaffold-internal and should not
+# ship to GitHub)
+.bootstrap-state.json
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Mobile
+mobile/node_modules/
+mobile/.env
+
+# Monorepo
+node_modules/
+package-lock.json
+
+# Database
+*.db
+*.sqlite3
+
+# OS
+.DS_Store
+Thumbs.db

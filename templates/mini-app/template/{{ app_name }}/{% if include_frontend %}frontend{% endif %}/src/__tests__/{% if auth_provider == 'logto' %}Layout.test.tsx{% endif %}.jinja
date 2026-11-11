@@ -1,0 +1,61 @@
+import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
+
+const mockUseLogto = vi.fn();
+vi.mock("@logto/react", () => ({
+  useLogto: () => mockUseLogto(),
+}));
+
+import ProtectedLayout from "../components/Layout";
+
+function renderLayout() {
+  return render(
+    <MemoryRouter>
+      <ProtectedLayout />
+    </MemoryRouter>
+  );
+}
+
+describe("ProtectedLayout", () => {
+  it("redirects to /login when not authenticated", () => {
+    mockUseLogto.mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      signOut: vi.fn(),
+    });
+    renderLayout();
+    // Navigate component renders nothing visible — the redirect happens silently
+    expect(screen.queryByText("{{ app_name }}")).not.toBeInTheDocument();
+  });
+
+  it("shows loading state on initial load", () => {
+    mockUseLogto.mockReturnValue({
+      isAuthenticated: false,
+      isLoading: true,
+      signOut: vi.fn(),
+    });
+    renderLayout();
+    expect(screen.getByText("Loading...")).toBeInTheDocument();
+  });
+
+  it("renders header with app name when authenticated", () => {
+    mockUseLogto.mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      signOut: vi.fn(),
+    });
+    renderLayout();
+    expect(screen.getByText("{{ app_name }}")).toBeInTheDocument();
+  });
+
+  it("renders sign out button when authenticated", () => {
+    mockUseLogto.mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      signOut: vi.fn(),
+    });
+    renderLayout();
+    expect(screen.getByText("Sign Out")).toBeInTheDocument();
+  });
+});

@@ -1,0 +1,132 @@
+{%- set AppCls = python_package_name.replace('_', ' ').title().replace(' ', '') -%}
+"""`{{ app_name }} items ...` — CLI for the sample items resource.
+
+Each command builds a payload, calls ``app.cli.operations.run`` (the same
+typed operations the MCP server uses), and renders the result. With the
+global ``--json`` flag, stdout is one JSON object: the operation output on
+success, or the failure envelope (``error_code`` + ``exit_code``) on error.
+Options left out are not sent, so ``items update ID --name X`` keeps the
+current description.
+"""
+
+from __future__ import annotations
+
+from typing import Any, NoReturn
+
+import typer
+from rich.markup import escape
+
+from app.cli import operations
+from app.cli.client import {{ AppCls }}ClientError, get_client
+from app.cli.output import console, emit_failure, render_json
+
+app = typer.Typer(
+    name="items",
+    help="Read and change your items through the {{ app_name }} API.",
+    no_args_is_help=True,
+)
+
+
+# `--json` works before the group (`--json items list`) or after the command
+# (`items list --json`). A wrong flag position must not look like an auth error.
+JSON_OPTION = typer.Option(False, "--json", help="Emit one JSON object on stdout.")
+
+
+def _use_json(ctx: typer.Context, json_output: bool) -> bool:
+    return json_output or (ctx.obj or {}).get("json", False)
+
+
+def _run(ctx: typer.Context, op_id: str, payload: dict[str, Any], json_output: bool) -> None:
+    use_json = _use_json(ctx, json_output)
+    # None means "not given": drop it so the API keeps the stored value.
+    payload = {k: v for k, v in payload.items() if v is not None}
+    try:
+        # Validate first so bad input never reads credentials or the network.
+        operations.parse_input(op_id, payload)
+        result = operations.run(op_id, get_client(), payload)
+    except {{ AppCls }}ClientError as exc:
+        _fail(use_json, op_id, exc.exit_code, exc.error_code, exc.message)
+    if use_json:
+        render_json(result)
+    else:
+        console.print(result)
+
+
+def _fail(
+    use_json: bool, op_id: str, exit_code: int, error_code: str, message: str
+) -> NoReturn:
+    if use_json:
+        emit_failure(
+            app_slug="{{ app_name }}",
+            checkpoint=op_id,
+            exit_code=exit_code,
+            error_code=error_code,
+            error_message=message,
+        )
+    else:
+        console.print(f"[red]error ({error_code}):[/red] {escape(message)}")
+    raise typer.Exit(code=exit_code)
+
+
+@app.command("list")
+def list_items(
+    ctx: typer.Context,
+    skip: int = typer.Option(0, help="Number of items to skip (newest first)."),
+    limit: int = typer.Option(20, help="Maximum number of items (1-100)."),
+    json_output: bool = JSON_OPTION,
+) -> None:
+    """List your items, newest first."""
+    _run(ctx, "items_list", {"skip": skip, "limit": limit}, json_output)
+
+
+@app.command("get")
+def get_item(
+    ctx: typer.Context,
+    item_id: str = typer.Argument(..., help="Item ID."),
+    json_output: bool = JSON_OPTION,
+) -> None:
+    """Get one of your items by ID."""
+    _run(ctx, "items_get", {"item_id": item_id}, json_output)
+
+
+@app.command("create")
+def create_item(
+    ctx: typer.Context,
+    name: str = typer.Option(..., help="Item name (1-255 characters)."),
+    description: str | None = typer.Option(None, help="Optional description."),
+    json_output: bool = JSON_OPTION,
+) -> None:
+    """Create an item that you own."""
+    _run(ctx, "items_create", {"name": name, "description": description}, json_output)
+
+
+@app.command("update")
+def update_item(
+    ctx: typer.Context,
+    item_id: str = typer.Argument(..., help="Item ID."),
+    name: str | None = typer.Option(None, help="New name."),
+    description: str | None = typer.Option(None, help="New description."),
+    json_output: bool = JSON_OPTION,
+) -> None:
+    """Change the name or description of one of your items."""
+    payload = {"item_id": item_id, "name": name, "description": description}
+    _run(ctx, "items_update", payload, json_output)
+
+
+@app.command("delete")
+def delete_item(
+    ctx: typer.Context,
+    item_id: str = typer.Argument(..., help="Item ID."),
+    yes: bool = typer.Option(False, "--yes", help="Confirm the delete. Required."),
+    json_output: bool = JSON_OPTION,
+) -> None:
+    """Delete one of your items. Cannot be undone; needs --yes."""
+    if not yes:
+        _fail(
+            _use_json(ctx, json_output),
+            "items_delete",
+            1,
+            "confirmation_required",
+            "delete is permanent; run again with --yes to confirm",
+        )
+    _run(ctx, "items_delete", {"item_id": item_id}, json_output)

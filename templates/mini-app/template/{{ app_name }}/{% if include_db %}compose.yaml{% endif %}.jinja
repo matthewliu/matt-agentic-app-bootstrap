@@ -1,0 +1,31 @@
+# Local Postgres for development only. The deployed app uses its host's
+# database ({{ 'render.yaml' if deploy_target == 'render' else 'Railway Postgres' }}), never this file.
+#
+# Start:  docker compose up -d db
+# Check:  docker compose ps        (STATUS shows "healthy" when ready)
+# Stop:   docker compose down      (your data stays in the named volume)
+# Reset:  docker compose down -v   (deletes all local data)
+#
+# The user name and password are fixed local values, not secrets. The port is
+# bound to 127.0.0.1, so other computers on your network cannot connect.
+# If port 5432 is in use, change the left number (for example
+# "127.0.0.1:5433:5432") and the port in DATABASE_URL in .env.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: {{ app_name }}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d {{ app_name }}"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  db-data:

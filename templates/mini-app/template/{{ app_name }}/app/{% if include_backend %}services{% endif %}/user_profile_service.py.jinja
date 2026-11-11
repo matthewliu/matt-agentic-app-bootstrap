@@ -1,0 +1,71 @@
+"""Business logic for user profile operations."""
+
+import logging
+
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models import UserProfile
+from app.models.user_profile import UserProfileUpdate
+
+logger = logging.getLogger(__name__)
+
+
+async def get_or_create_profile(
+    db: AsyncSession,
+    user_id: str,
+    default_timezone: str | None = None,
+) -> UserProfile:
+    """Ensure a UserProfile exists for the given user.
+
+    On first call, creates the profile with the given timezone (or "UTC").
+    On subsequent calls, auto-updates timezone only if the profile still has
+    the "UTC" default (write-once from default).
+    Handles race conditions via IntegrityError catch.
+    """
+    profile = await db.get(UserProfile, user_id)
+    if profile:
+        # Update timezone only from UTC default (write-once)
+        if default_timezone and profile.timezone == "UTC":
+            profile.timezone = default_timezone
+            await db.commit()
+        return profile
+
+    # Attempt to create
+    try:
+        profile = UserProfile(
+            user_id=user_id,
+            timezone=default_timezone or "UTC",
+        )
+        db.add(profile)
+        await db.flush()
+        await db.commit()
+        await db.refresh(profile)
+        return profile
+    except IntegrityError:
+        # Race condition: another request already created this profile
+        logger.info("Profile already created by concurrent request for user %s", user_id)
+        await db.rollback()
+        profile = await db.get(UserProfile, user_id)
+        if profile is None:
+            raise RuntimeError(
+                f"Profile for {user_id} not found after IntegrityError"
+            ) from None
+        return profile
+
+
+async def get_profile(db: AsyncSession, user_id: str) -> UserProfile | None:
+    """Get user profile by ID."""
+    return await db.get(UserProfile, user_id)
+
+
+async def update_profile(
+    db: AsyncSession, profile: UserProfile, data: UserProfileUpdate
+) -> UserProfile:
+    """Update user profile with provided fields."""
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(profile, field, value)
+    await db.commit()
+    await db.refresh(profile)
+    return profile

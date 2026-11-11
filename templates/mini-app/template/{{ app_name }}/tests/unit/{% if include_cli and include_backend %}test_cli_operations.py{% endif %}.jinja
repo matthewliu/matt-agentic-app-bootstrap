@@ -1,0 +1,533 @@
+{%- set AppCls = python_package_name.replace('_', ' ').title().replace(' ', '') -%}
+{%- set APP_UPPER = app_name.replace('-', '_').upper() -%}
+"""Tests for the CLI client, the shared operations, and the `items` commands.
+
+Every request goes to an ``httpx.MockTransport``. No network, no real
+credentials: the token and agent key below are dummies.
+"""
+
+import ast
+import inspect
+import json
+import uuid
+
+import httpx
+import pytest
+from typer.testing import CliRunner
+
+from app.cli import client as client_mod
+from app.cli import operations
+from app.cli.client import (
+    AgentKeyTokenProvider,
+    {{ AppCls }}Client,
+    {{ AppCls }}ClientError,
+)
+from app.cli.commands import items as items_cmd
+from app.cli.main import app as cli_app
+from app.main import app as api_app
+
+DUMMY_TOKEN = "dummy-access-token-0123456789"
+DUMMY_AGENT_KEY = "agk.cli-test." + "A" * 43
+ACTOR = "user-1"
+ITEM_ID = "3f8c2d1e-5b6a-4c7d-8e9f-0a1b2c3d4e5f"
+ITEM = {
+    "id": ITEM_ID,
+    "name": "First",
+    "description": "kept",
+    "created_at": "2026-11-10T00:00:00Z",
+    "updated_at": "2026-11-10T00:00:00Z",
+}
+ENV_VARS = [
+    "{{ APP_UPPER }}_API_URL",
+    "{{ APP_UPPER }}_USER_SUB",
+    "{{ APP_UPPER }}_LOGTO_ENDPOINT",
+    "{{ APP_UPPER }}_API_RESOURCE",
+    "{{ APP_UPPER }}_M2M_APP_ID",
+    "{{ APP_UPPER }}_M2M_APP_SECRET",
+    "{{ APP_UPPER }}_AGENT_KEY",
+    "{{ APP_UPPER }}_AGENT_KEY_FILE",
+]
+
+
+class FakeTokens:
+    def __init__(self, token: str = DUMMY_TOKEN, refreshable: bool = True) -> None:
+        self.token = token
+        self.refreshable = refreshable
+        self.invalidated = 0
+
+    def get_token(self) -> str:
+        return self.token
+
+    def invalidate(self) -> None:
+        self.invalidated += 1
+
+
+class Recorder:
+    """MockTransport handler that records requests and replays responses."""
+
+    def __init__(self, *responses: httpx.Response) -> None:
+        self.responses = list(responses)
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        return self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
+
+
+def make_client(handler, tokens=None) -> {{ AppCls }}Client:
+    return {{ AppCls }}Client(
+        base_url="https://api.test",
+        token_manager=tokens or FakeTokens(),
+        actor_sub=ACTOR,
+        transport=httpx.MockTransport(handler),
+    )
+
+
+@pytest.fixture(autouse=True)
+def clean_env(monkeypatch):
+    for name in ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(client_mod, "_client", None)
+
+
+# ---------------------------------------------------------------------------
+# Client
+# ---------------------------------------------------------------------------
+
+
+class TestClientConfig:
+    def test_missing_env_fails_closed_with_variable_name(self):
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            client_mod.get_client()
+        assert exc.value.exit_code == 5
+        assert exc.value.error_code == "misconfigured"
+        assert "{{ APP_UPPER }}_API_URL" in exc.value.message
+
+    def test_unknown_auth_provider_fails_before_reading_env(self, monkeypatch):
+        monkeypatch.setattr(client_mod, "AUTH_PROVIDER", "something-else")
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            client_mod.get_client()
+        assert exc.value.exit_code == 5
+        assert exc.value.error_code == "machine_auth_not_supported"
+
+    @pytest.mark.parametrize("url", ["localhost:8000", "ftp://api.test", "https://", "not a url"])
+    def test_api_url_must_be_http(self, monkeypatch, url):
+        monkeypatch.setenv("{{ APP_UPPER }}_API_URL", url)
+        monkeypatch.setenv("{{ APP_UPPER }}_USER_SUB", ACTOR)
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            client_mod.get_client()
+        assert exc.value.exit_code == 5
+        assert exc.value.error_code == "misconfigured"
+
+    @pytest.mark.parametrize("actor", ["user one", "us\u00e9r", "x" * 256, "line\nbreak"])
+    def test_logto_actor_must_be_printable_ascii(self, monkeypatch, actor):
+        monkeypatch.setattr(client_mod, "AUTH_PROVIDER", "logto")
+        monkeypatch.setenv("{{ APP_UPPER }}_API_URL", "https://api.test")
+        monkeypatch.setenv("{{ APP_UPPER }}_USER_SUB", actor)
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            client_mod.get_client()
+        assert exc.value.error_code == "misconfigured"
+
+    @pytest.mark.parametrize(
+        "body", [b"not json", b'{"token_type": "Bearer"}', b'["a"]', b'{"access_token": ""}']
+    )
+    def test_malformed_logto_token_response_is_typed(self, tmp_path, body):
+        def handler(request):
+            return httpx.Response(200, content=body)
+
+        tokens = client_mod.LogtoM2MTokenManager(
+            endpoint="https://logto.test",
+            app_id="dummy-id",
+            app_secret="dummy-secret",
+            resource="https://api.test/api",
+            scopes=["read"],
+            cache_path=tmp_path / "token.json",
+            transport=httpx.MockTransport(handler),
+        )
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            tokens.get_token()
+        assert exc.value.exit_code == 2
+        assert exc.value.error_code == "token_mint_failed"
+        assert "dummy-secret" not in exc.value.message
+
+    def test_logto_mode_needs_m2m_settings(self, monkeypatch):
+        monkeypatch.setattr(client_mod, "AUTH_PROVIDER", "logto")
+        monkeypatch.setenv("{{ APP_UPPER }}_API_URL", "https://api.test")
+        monkeypatch.setenv("{{ APP_UPPER }}_USER_SUB", ACTOR)
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            client_mod.get_client()
+        assert exc.value.error_code == "misconfigured"
+        assert "{{ APP_UPPER }}_LOGTO_ENDPOINT" in exc.value.message
+
+
+class TestAgentKey:
+    @pytest.fixture(autouse=True)
+    def google_mode(self, monkeypatch):
+        monkeypatch.setattr(client_mod, "AUTH_PROVIDER", "google")
+        monkeypatch.setenv("{{ APP_UPPER }}_API_URL", "https://api.test")
+        monkeypatch.setenv("{{ APP_UPPER }}_USER_SUB", "google:1234")
+
+    def test_inline_key_is_used(self, monkeypatch):
+        monkeypatch.setenv("{{ APP_UPPER }}_AGENT_KEY", DUMMY_AGENT_KEY)
+        built = client_mod.get_client()
+        assert built.token_manager.get_token() == DUMMY_AGENT_KEY
+        assert built.actor_sub == "google:1234"
+
+    def test_missing_key_names_both_settings(self):
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            client_mod.get_client()
+        assert exc.value.error_code == "misconfigured"
+        assert "{{ APP_UPPER }}_AGENT_KEY_FILE" in exc.value.message
+        assert "{{ APP_UPPER }}_AGENT_KEY " in exc.value.message + " "
+
+    @pytest.mark.parametrize("actor", ["not-a-google-actor", "google:", "google:a b", "1234"])
+    def test_malformed_google_actor_fails_closed(self, monkeypatch, actor):
+        monkeypatch.setenv("{{ APP_UPPER }}_USER_SUB", actor)
+        monkeypatch.setenv("{{ APP_UPPER }}_AGENT_KEY", DUMMY_AGENT_KEY)
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            client_mod.get_client()
+        assert exc.value.exit_code == 5
+        assert exc.value.error_code == "misconfigured"
+
+    def test_empty_key_file_setting_never_falls_back(self, monkeypatch):
+        monkeypatch.setenv("{{ APP_UPPER }}_AGENT_KEY_FILE", "")
+        monkeypatch.setenv("{{ APP_UPPER }}_AGENT_KEY", DUMMY_AGENT_KEY)
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            client_mod.get_client()
+        assert exc.value.error_code == "misconfigured"
+        assert "{{ APP_UPPER }}_AGENT_KEY_FILE" in exc.value.message
+
+    def test_bad_key_file_content_names_the_file_setting(self, monkeypatch, tmp_path):
+        key_file = tmp_path / "bad.agent-key"
+        key_file.write_text("agk.short.key\r\n")
+        key_file.chmod(0o600)
+        monkeypatch.setenv("{{ APP_UPPER }}_AGENT_KEY_FILE", str(key_file))
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            client_mod.get_client()
+        assert exc.value.message.startswith("{{ APP_UPPER }}_AGENT_KEY_FILE ")
+        assert "agk.short.key" not in exc.value.message
+
+    def test_missing_actor_fails_closed(self, monkeypatch):
+        monkeypatch.delenv("{{ APP_UPPER }}_USER_SUB")
+        monkeypatch.setenv("{{ APP_UPPER }}_AGENT_KEY", DUMMY_AGENT_KEY)
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            client_mod.get_client()
+        assert exc.value.error_code == "misconfigured"
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            DUMMY_AGENT_KEY + "\n",
+            "agk.cli-test." + "A" * 42,
+            "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln",  # a JWT, e.g. a Google ID token
+            "agk.UPPER." + "A" * 43,
+        ],
+    )
+    def test_malformed_key_is_refused_without_echo(self, monkeypatch, bad):
+        monkeypatch.setenv("{{ APP_UPPER }}_AGENT_KEY", bad)
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            client_mod.get_client()
+        assert exc.value.exit_code == 5
+        assert exc.value.error_code == "misconfigured"
+        assert bad.strip() not in exc.value.message
+
+    def test_key_file_preferred_and_one_newline_stripped(self, monkeypatch, tmp_path):
+        key_file = tmp_path / "cli-test.agent-key"
+        key_file.write_text(DUMMY_AGENT_KEY + "\n")
+        key_file.chmod(0o600)
+        monkeypatch.setenv("{{ APP_UPPER }}_AGENT_KEY_FILE", str(key_file))
+        monkeypatch.setenv("{{ APP_UPPER }}_AGENT_KEY", "agk.other." + "B" * 43)
+        assert client_mod.get_client().token_manager.get_token() == DUMMY_AGENT_KEY
+
+    def test_key_file_readable_by_others_is_refused(self, monkeypatch, tmp_path):
+        key_file = tmp_path / "cli-test.agent-key"
+        key_file.write_text(DUMMY_AGENT_KEY)
+        key_file.chmod(0o644)
+        monkeypatch.setenv("{{ APP_UPPER }}_AGENT_KEY_FILE", str(key_file))
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            client_mod.get_client()
+        assert exc.value.error_code == "misconfigured"
+
+    def test_bad_key_file_never_falls_back_or_echoes_setting(self, monkeypatch):
+        # A key pasted into the FILE variable by mistake must not be echoed.
+        monkeypatch.setenv("{{ APP_UPPER }}_AGENT_KEY_FILE", DUMMY_AGENT_KEY)
+        monkeypatch.setenv("{{ APP_UPPER }}_AGENT_KEY", DUMMY_AGENT_KEY)
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            client_mod.get_client()
+        assert exc.value.error_code == "misconfigured"
+        assert DUMMY_AGENT_KEY not in exc.value.message
+        assert "{{ APP_UPPER }}_AGENT_KEY_FILE" in exc.value.message
+
+    def test_repr_hides_key(self):
+        assert DUMMY_AGENT_KEY not in repr(AgentKeyTokenProvider(DUMMY_AGENT_KEY))
+
+
+class TestClientRequests:
+    def test_actor_header_matches_the_server(self):
+        from app.auth import middleware
+
+        # Header lookup ignores case, but a hyphen never matches an underscore.
+        assert {{ AppCls }}Client.ACTOR_SUB_HEADER.lower() == middleware.ACTOR_SUB_HEADER.lower()
+
+    def test_sends_bearer_and_actor_headers(self):
+        rec = Recorder(httpx.Response(200, json=[]))
+        make_client(rec).get("/api/items")
+        sent = rec.requests[0]
+        assert sent.headers["Authorization"] == f"Bearer {DUMMY_TOKEN}"
+        assert sent.headers[{{ AppCls }}Client.ACTOR_SUB_HEADER] == ACTOR
+
+    @pytest.mark.parametrize(
+        ("status", "detail"),
+        [
+            (503, "auth_not_configured"),
+            (401, "machine_auth_not_configured"),
+            (503, "agent_credentials_invalid"),
+            (401, "invalid_agent_credential"),
+            (401, "agent_credential_expired"),
+            (403, "missing_actor_sub_header"),
+            (403, "actor_mismatch"),
+            (403, "missing_scope"),
+            (403, "actor_sub_not_allowed"),
+        ],
+    )
+    def test_server_detail_becomes_error_code(self, status, detail):
+        rec = Recorder(httpx.Response(status, json={"detail": detail}))
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            make_client(rec, FakeTokens(refreshable=False)).get("/api/items")
+        assert exc.value.error_code == detail
+        assert exc.value.status_code == status
+        assert exc.value.exit_code == (2 if status == 401 else 3)
+
+    def test_detail_with_newline_is_not_an_error_code(self):
+        rec = Recorder(httpx.Response(403, json={"detail": "actor_mismatch\n"}))
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            make_client(rec, FakeTokens(refreshable=False)).get("/api/items")
+        assert exc.value.error_code == "forbidden"
+
+    def test_free_text_detail_falls_back_to_status_code(self):
+        rec = Recorder(httpx.Response(404, json={"detail": "Not found"}))
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            make_client(rec).get("/api/items/x")
+        assert exc.value.error_code == "not_found"
+
+    def test_static_key_is_not_retried_on_401(self):
+        rec = Recorder(httpx.Response(401, json={"detail": "invalid_agent_credential"}))
+        with pytest.raises({{ AppCls }}ClientError):
+            make_client(rec, FakeTokens(refreshable=False)).get("/api/items")
+        assert len(rec.requests) == 1
+
+    def test_refreshable_token_is_retried_once_on_401(self):
+        tokens = FakeTokens(refreshable=True)
+        rec = Recorder(httpx.Response(401, json={"detail": "expired"}))
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            make_client(rec, tokens).get("/api/items")
+        assert len(rec.requests) == 2
+        assert tokens.invalidated == 1
+        assert exc.value.error_code == "expired"
+
+    @pytest.mark.parametrize("secret", [DUMMY_TOKEN, DUMMY_AGENT_KEY])
+    @pytest.mark.parametrize("padding", [0, 190], ids=["whole", "cut-by-truncation"])
+    def test_reflected_credential_is_redacted(self, secret, padding):
+        # padding=190 puts the 200-character cut inside the secret.
+        body = "x" * padding + f"{secret} rejected"
+        rec = Recorder(httpx.Response(400, text=body))
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            make_client(rec, FakeTokens(token=secret)).get("/api/items")
+        assert secret[:10] not in exc.value.message
+        assert secret[:10] not in str(exc.value)
+
+    def test_transport_error_is_a_network_error(self):
+        def boom(request):
+            raise httpx.ConnectError("refused", request=request)
+
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            make_client(boom).get("/api/items")
+        assert exc.value.exit_code == 4
+        assert exc.value.error_code == "network_error"
+
+
+# ---------------------------------------------------------------------------
+# Operations
+# ---------------------------------------------------------------------------
+
+
+class TestOperationsContract:
+    def test_every_operation_matches_an_openapi_operation(self):
+        spec = api_app.openapi()
+        by_id = {
+            op["operationId"]: (method.upper(), path)
+            for path, methods in spec["paths"].items()
+            for method, op in methods.items()
+            if "operationId" in op
+        }
+        for op in operations.OPERATIONS.values():
+            assert by_id.get(op.id) == (op.method, op.path), op.id
+
+    def test_list_limits_match_the_route(self):
+        spec = api_app.openapi()
+        params = {
+            p["name"]: p["schema"] for p in spec["paths"]["/api/items"]["get"]["parameters"]
+        }
+        model = operations.ItemsListInput.model_json_schema()["properties"]
+        assert params["skip"]["minimum"] == model["skip"]["minimum"]
+        assert params["limit"]["minimum"] == model["limit"]["minimum"]
+        assert params["limit"]["maximum"] == model["limit"]["maximum"]
+
+    def test_operations_never_touch_the_database(self):
+        tree = ast.parse(inspect.getsource(operations))
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module)
+            elif isinstance(node, ast.Import):
+                imported.update(a.name for a in node.names)
+        forbidden = {m for m in imported if m.startswith(("app.db", "app.services", "sqlalchemy"))}
+        assert forbidden == set()
+
+    def test_delete_is_never_an_mcp_tool(self):
+        assert operations.OPERATIONS["items_delete"].mcp_tool is False
+        assert operations.OPERATIONS["items_delete"].access == "destructive"
+
+    def test_describe_lists_schemas(self):
+        described = {d["id"]: d for d in operations.describe()}
+        assert set(described) == set(operations.OPERATIONS)
+        assert described["items_list"]["input_schema"]["properties"]["limit"]["maximum"] == 100
+        assert described["items_list"]["mcp_exposure"] == "default"
+        assert described["items_create"]["mcp_exposure"] == "opt_in"
+        assert described["items_delete"]["mcp_exposure"] == "never"
+        assert "items" in described["items_list"]["output_schema"]["properties"]
+
+
+class TestOperationsRun:
+    @pytest.mark.parametrize(
+        ("op_id", "payload"),
+        [
+            ("items_list", {"limit": 0}),
+            ("items_list", {"limit": 5, "user_id": "someone-else"}),
+            ("items_get", {"item_id": "../../admin"}),
+            ("items_update", {"item_id": ITEM_ID}),
+            ("items_update", {"item_id": ITEM_ID, "name": None}),
+            ("items_create", {"name": ""}),
+        ],
+    )
+    def test_invalid_input_sends_nothing(self, op_id, payload):
+        rec = Recorder(httpx.Response(200, json=ITEM))
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            operations.run(op_id, make_client(rec), payload)
+        assert exc.value.exit_code == 1
+        assert exc.value.error_code == "invalid_input"
+        assert rec.requests == []
+
+    def test_list_wraps_items_and_sends_query(self):
+        rec = Recorder(httpx.Response(200, json=[ITEM]))
+        out = operations.run("items_list", make_client(rec), {"limit": 5})
+        assert out["items"][0]["id"] == ITEM_ID
+        assert rec.requests[0].url.params["limit"] == "5"
+        assert rec.requests[0].url.params["skip"] == "0"
+
+    def test_update_sends_only_given_fields(self):
+        rec = Recorder(httpx.Response(200, json=ITEM))
+        operations.run("items_update", make_client(rec), {"item_id": ITEM_ID, "name": "New"})
+        assert json.loads(rec.requests[0].content) == {"name": "New"}
+        assert rec.requests[0].url.path == f"/api/items/{ITEM_ID}"
+
+    def test_delete_returns_a_typed_result(self):
+        rec = Recorder(httpx.Response(204))
+        out = operations.run("items_delete", make_client(rec), {"item_id": ITEM_ID})
+        assert out == {"deleted": True, "item_id": ITEM_ID}
+        assert rec.requests[0].method == "DELETE"
+
+    def test_unexpected_response_is_invalid_response(self):
+        rec = Recorder(httpx.Response(200, json={"surprise": True}))
+        with pytest.raises({{ AppCls }}ClientError) as exc:
+            operations.run("items_get", make_client(rec), {"item_id": ITEM_ID})
+        assert exc.value.error_code == "invalid_response"
+
+
+# ---------------------------------------------------------------------------
+# CLI commands
+# ---------------------------------------------------------------------------
+
+runner = CliRunner()
+
+
+@pytest.fixture
+def fake_api(monkeypatch):
+    def _install(*responses):
+        rec = Recorder(*responses)
+        monkeypatch.setattr(items_cmd, "get_client", lambda: make_client(rec))
+        return rec
+
+    return _install
+
+
+class TestItemsCommands:
+    def test_list_json(self, fake_api):
+        rec = fake_api(httpx.Response(200, json=[ITEM]))
+        result = runner.invoke(cli_app, ["--json", "items", "list", "--limit", "5"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["items"][0]["id"] == ITEM_ID
+        assert rec.requests[0].url.params["limit"] == "5"
+
+    def test_json_flag_after_the_command(self, fake_api):
+        fake_api(httpx.Response(200, json=[ITEM]))
+        result = runner.invoke(cli_app, ["items", "list", "--json"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["items"][0]["id"] == ITEM_ID
+
+    def test_delete_refusal_honors_trailing_json_flag(self, fake_api):
+        fake_api(httpx.Response(204))
+        result = runner.invoke(cli_app, ["items", "delete", ITEM_ID, "--json"])
+        assert result.exit_code == 1
+        assert json.loads(result.stdout)["error_code"] == "confirmation_required"
+
+    def test_update_with_name_only_keeps_description(self, fake_api):
+        rec = fake_api(httpx.Response(200, json=ITEM))
+        result = runner.invoke(cli_app, ["--json", "items", "update", ITEM_ID, "--name", "New"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(rec.requests[0].content) == {"name": "New"}
+
+    def test_delete_needs_yes(self, fake_api):
+        rec = fake_api(httpx.Response(204))
+        result = runner.invoke(cli_app, ["--json", "items", "delete", ITEM_ID])
+        assert result.exit_code == 1
+        assert json.loads(result.stdout)["error_code"] == "confirmation_required"
+        assert rec.requests == []
+
+    def test_delete_with_yes(self, fake_api):
+        fake_api(httpx.Response(204))
+        result = runner.invoke(cli_app, ["--json", "items", "delete", ITEM_ID, "--yes"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout) == {"deleted": True, "item_id": ITEM_ID}
+
+    def test_bad_id_exits_1(self, fake_api):
+        rec = fake_api(httpx.Response(200, json=ITEM))
+        result = runner.invoke(cli_app, ["--json", "items", "get", "not-a-uuid"])
+        assert result.exit_code == 1
+        assert json.loads(result.stdout)["error_code"] == "invalid_input"
+        assert rec.requests == []
+
+    def test_not_found_json_envelope(self, fake_api):
+        fake_api(httpx.Response(404, json={"detail": "Not found"}))
+        result = runner.invoke(cli_app, ["--json", "items", "get", str(uuid.uuid4())])
+        assert result.exit_code == 3
+        envelope = json.loads(result.stdout)
+        assert envelope["status"] == "failed"
+        assert envelope["error_code"] == "not_found"
+        assert envelope["checkpoint"] == "items_get"
+
+    def test_missing_config_exits_5(self):
+        result = runner.invoke(cli_app, ["--json", "items", "list"])
+        assert result.exit_code == 5
+        assert json.loads(result.stdout)["error_code"] == "misconfigured"
+
+
+class TestAgentContext:
+    @pytest.mark.parametrize("argv", [["agent-context", "--json"], ["--json", "agent-context"]])
+    def test_lists_operations(self, argv):
+        result = runner.invoke(cli_app, argv)
+        assert result.exit_code == 0, result.output
+        envelope = json.loads(result.stdout)
+        ids = {op["id"] for op in envelope["operations"]}
+        assert {"items_list", "items_get", "items_create", "items_update", "items_delete"} <= ids
+        assert envelope["auth"]["required_env_vars"]

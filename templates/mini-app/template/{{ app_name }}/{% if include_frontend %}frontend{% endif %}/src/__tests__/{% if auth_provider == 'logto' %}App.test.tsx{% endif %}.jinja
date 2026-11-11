@@ -1,0 +1,101 @@
+import { render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+
+// Mock @logto/react
+const mockUseLogto = vi.fn();
+vi.mock("@logto/react", () => ({
+  LogtoProvider: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="logto-provider">{children}</div>
+  ),
+  useLogto: () => mockUseLogto(),
+  useHandleSignInCallback: vi.fn(() => ({ isLoading: false, error: null })),
+}));
+
+// The real ../config runs here. Each test sets the build-time VITE_* values
+// it needs with vi.stubEnv, so both the configured and the not-configured
+// paths are exercised end to end.
+function stubLogtoEnv(endpoint: string, appId: string) {
+  vi.stubEnv("VITE_LOGTO_ENDPOINT", endpoint);
+  vi.stubEnv("VITE_LOGTO_APP_ID", appId);
+}
+
+import App from "../App";
+
+describe("App", () => {
+  beforeEach(() => {
+    stubLogtoEnv("https://logto.example.com", "test-app-id");
+    mockUseLogto.mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      signIn: vi.fn(),
+      signOut: vi.fn(),
+      getAccessToken: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("renders without crashing", () => {
+    render(<App />);
+    expect(screen.getByTestId("logto-provider")).toBeInTheDocument();
+  });
+
+  it("renders inside LogtoProvider when both Logto values are set", () => {
+    render(<App />);
+    expect(screen.getByTestId("logto-provider")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Sign-in is not configured for this deployment."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the not-configured panel when VITE_LOGTO_* are empty", () => {
+    stubLogtoEnv("", "");
+    mockUseLogto.mockClear();
+
+    expect(() => render(<App />)).not.toThrow();
+    expect(
+      screen.getByText("Sign-in is not configured for this deployment."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/VITE_LOGTO_ENDPOINT, VITE_LOGTO_APP_ID/),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("logto-provider")).not.toBeInTheDocument();
+    expect(mockUseLogto).not.toHaveBeenCalled();
+  });
+
+  it("renders the not-configured panel when only the app ID is missing", () => {
+    stubLogtoEnv("https://logto.example.com", "");
+
+    render(<App />);
+    expect(
+      screen.getByText("Sign-in is not configured for this deployment."),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("logto-provider")).not.toBeInTheDocument();
+  });
+
+  it("renders login page at /login route", () => {
+    mockUseLogto.mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      signIn: vi.fn(),
+      signOut: vi.fn(),
+    });
+
+    // App already contains BrowserRouter, so mock it as MemoryRouter to control initial route
+    vi.mock("react-router-dom", async () => {
+      const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+      return {
+        ...actual,
+        BrowserRouter: ({ children }: { children: React.ReactNode }) => (
+          <actual.MemoryRouter initialEntries={["/login"]}>{children}</actual.MemoryRouter>
+        ),
+      };
+    });
+
+    render(<App />);
+    // Login page should render sign-in button
+    expect(screen.getByText("Sign In")).toBeInTheDocument();
+  });
+});

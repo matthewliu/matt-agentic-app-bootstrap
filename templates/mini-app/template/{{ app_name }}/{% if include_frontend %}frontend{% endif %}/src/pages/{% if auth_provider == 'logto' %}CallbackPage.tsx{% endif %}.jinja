@@ -1,0 +1,37 @@
+import { useHandleSignInCallback } from "@logto/react";
+import { useNavigate } from "react-router-dom";
+
+export default function CallbackPage() {
+  const navigate = useNavigate();
+
+  const { isLoading, error } = useHandleSignInCallback(() => {
+    navigate("/", { replace: true });
+  });
+
+  if (error) {
+    console.error("Sign-in callback error:", error.message);
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg-primary">
+        <div className="text-center">
+          <p className="text-error font-body mb-4">Sign-in failed. Please try again.</p>
+          <a
+            href="/login"
+            className="text-accent hover:text-accent-hover font-body underline"
+          >
+            Try again
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg-primary">
+        <p className="text-text-secondary font-body">Signing in...</p>
+      </div>
+    );
+  }
+
+  return null;
+}

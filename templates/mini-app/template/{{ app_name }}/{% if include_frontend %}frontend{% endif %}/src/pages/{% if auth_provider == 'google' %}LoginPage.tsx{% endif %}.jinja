@@ -1,0 +1,54 @@
+import { Navigate, useSearchParams } from "react-router-dom";
+import { startSignIn, useAuth } from "../auth";
+import ThemeToggle from "../components/ThemeToggle";
+
+/** Fixed text per error code. The page never shows text from the URL. */
+export const SIGN_IN_ERRORS: Record<string, string> = {
+  not_allowed:
+    "This Google account is not on the list of people who can use this app. " +
+    "Sign in with another account, or ask the app operator to add you.",
+  email_not_verified:
+    "Google has not verified the email address of this account. " +
+    "Verify it with Google, then try again.",
+  session_expired: "Your session ended. Sign in again to continue.",
+  login_failed: "Sign-in did not finish. Try again.",
+};
+
+export default function LoginPage() {
+  const { status, error } = useAuth();
+  const [params] = useSearchParams();
+
+  if (status === "signed_in") {
+    return <Navigate to="/" replace />;
+  }
+
+  const code = params.get("error") ?? error;
+  const message = code ? (SIGN_IN_ERRORS[code] ?? SIGN_IN_ERRORS.login_failed) : null;
+
+  return (
+    <div className="relative flex min-h-screen items-center justify-center bg-bg-primary px-4">
+      <div className="absolute right-md top-md">
+        <ThemeToggle />
+      </div>
+      <div className="w-full max-w-sm rounded-lg bg-bg-secondary border border-border-subtle p-8 shadow-md text-center">
+        <h1 className="font-heading text-2xl font-bold text-text-primary mb-2">
+          {{ app_name }}
+        </h1>
+        {message ? (
+          <p role="alert" className="text-error font-body mb-6">
+            {message}
+          </p>
+        ) : (
+          <p className="text-text-secondary font-body mb-6">Sign in to continue.</p>
+        )}
+        <button
+          onClick={() => startSignIn("/")}
+          disabled={status === "loading"}
+          className="w-full rounded-md bg-accent px-4 py-3 font-body font-medium text-accent-contrast hover:bg-accent-hover transition-colors duration-fast disabled:opacity-60"
+        >
+          Sign in with Google
+        </button>
+      </div>
+    </div>
+  );
+}

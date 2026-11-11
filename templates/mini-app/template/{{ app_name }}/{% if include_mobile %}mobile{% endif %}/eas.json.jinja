@@ -1,0 +1,48 @@
+{
+  "cli": {
+    "version": ">= 12.0.0"
+  },
+  "build": {
+    "base": {
+      "node": "22.0.0",
+      "pnpm": "10.0.0",
+      "installCommand": "cd .. && pnpm install --no-frozen-lockfile"
+    },
+    "development": {
+      "extends": "base",
+      "developmentClient": true,
+      "distribution": "internal",
+      "ios": {
+        "simulator": true
+      },
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://{{ app_name }}.up.railway.app",
+        "EXPO_PUBLIC_LOGTO_ENDPOINT": "{{ logto_endpoint }}",
+        "EXPO_PUBLIC_LOGTO_APP_ID": "YOUR_NATIVE_APP_ID",
+        "EXPO_PUBLIC_LOGTO_API_RESOURCE": "https://{{ app_name }}.up.railway.app/api"
+      }
+    },
+    "preview": {
+      "extends": "base",
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://{{ app_name }}.up.railway.app",
+        "EXPO_PUBLIC_LOGTO_ENDPOINT": "{{ logto_endpoint }}",
+        "EXPO_PUBLIC_LOGTO_APP_ID": "YOUR_NATIVE_APP_ID",
+        "EXPO_PUBLIC_LOGTO_API_RESOURCE": "https://{{ app_name }}.up.railway.app/api"
+      }
+    },
+    "production": {
+      "extends": "base",
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://{{ app_name }}.up.railway.app",
+        "EXPO_PUBLIC_LOGTO_ENDPOINT": "{{ logto_endpoint }}",
+        "EXPO_PUBLIC_LOGTO_APP_ID": "YOUR_NATIVE_APP_ID",
+        "EXPO_PUBLIC_LOGTO_API_RESOURCE": "https://{{ app_name }}.up.railway.app/api"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

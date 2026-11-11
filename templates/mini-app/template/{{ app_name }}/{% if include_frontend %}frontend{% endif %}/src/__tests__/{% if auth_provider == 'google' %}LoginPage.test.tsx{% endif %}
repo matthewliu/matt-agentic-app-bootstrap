@@ -1,0 +1,47 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const authState = { status: "signed_out" };
+vi.mock("../auth", async () => {
+  const actual = await vi.importActual<typeof import("../auth")>("../auth");
+  return { ...actual, useAuth: () => authState };
+});
+
+import LoginPage, { SIGN_IN_ERRORS } from "../pages/LoginPage";
+
+function renderAt(path: string) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <LoginPage />
+    </MemoryRouter>,
+  );
+}
+
+describe("LoginPage", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each(Object.entries(SIGN_IN_ERRORS))("shows fixed text for %s", (code, text) => {
+    renderAt(`/login?error=${code}`);
+    expect(screen.getByRole("alert")).toHaveTextContent(text);
+  });
+
+  it("never shows text taken from the URL", () => {
+    renderAt("/login?error=%3Cb%3Eyou%20were%20hacked%3C%2Fb%3E");
+    expect(screen.getByRole("alert")).toHaveTextContent(SIGN_IN_ERRORS.login_failed);
+    expect(screen.queryByText(/hacked/)).not.toBeInTheDocument();
+  });
+
+  it("starts Google sign-in through the backend", () => {
+    const assign = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({
+      ...window.location,
+      assign,
+    } as Location);
+    renderAt("/login");
+    fireEvent.click(screen.getByText("Sign in with Google"));
+    expect(assign).toHaveBeenCalledWith("/auth/login?next=%2F");
+  });
+});

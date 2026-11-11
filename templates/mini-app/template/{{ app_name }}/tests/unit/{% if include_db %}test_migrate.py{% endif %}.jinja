@@ -1,0 +1,33 @@
+"""{{ app_name }}-migrate runs the Alembic upgrade with no arguments (Render pre-deploy)."""
+
+import sqlite3
+
+import pytest
+
+from app.db import migrate
+
+
+def test_migrate_creates_tables(tmp_path, monkeypatch):
+    db = tmp_path / "m.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db}")
+    monkeypatch.setattr("sys.argv", ["{{ app_name }}-migrate"])
+    migrate.main()
+    tables = {r[0] for r in sqlite3.connect(db).execute("select name from sqlite_master")}
+    assert {"user_profiles", "items", "alembic_version"} <= tables
+
+
+def test_migrate_uses_app_settings_without_database_url(tmp_path, monkeypatch):
+    # Local work: DATABASE_URL lives in .env, not in the process environment.
+    db = tmp_path / "local.db"
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr("app.config.settings.database_url", f"sqlite+aiosqlite:///{db}")
+    monkeypatch.setattr("sys.argv", ["{{ app_name }}-migrate"])
+    migrate.main()
+    tables = {r[0] for r in sqlite3.connect(db).execute("select name from sqlite_master")}
+    assert {"user_profiles", "items", "alembic_version"} <= tables
+
+
+def test_migrate_fails_clearly_outside_repo_root(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit, match="not found"):
+        migrate.main()

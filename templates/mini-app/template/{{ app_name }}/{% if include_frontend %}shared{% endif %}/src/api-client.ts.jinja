@@ -1,0 +1,36 @@
+/**
+ * Typed fetch wrapper for API calls.
+ * No auth imports — each platform wraps this with its own auth mechanism.
+ */
+
+export type FetchOptions = {
+  baseUrl: string;
+  headers?: Record<string, string>;
+};
+
+export async function apiFetch<T>(
+  path: string,
+  options: FetchOptions & RequestInit
+): Promise<T> {
+  const { baseUrl, headers = {}, ...fetchOptions } = options;
+
+  if (!baseUrl) {
+    throw new Error(
+      'baseUrl is required for apiFetch. Set EXPO_PUBLIC_API_BASE_URL (mobile) or use the proxy (web).'
+    );
+  }
+
+  const response = await fetch(`${baseUrl}${path}`, {
+    ...fetchOptions,
+    headers: {
+      'Content-Type': 'application/json',
+      ...headers,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`API error: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}

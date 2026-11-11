@@ -1,0 +1,52 @@
+import { defineConfig, type Plugin } from "vite";
+import react from "@vitejs/plugin-react";
+import { fontStylesheet } from "./src/design/tokens";
+
+/** Adds the web-font links from src/design/tokens.ts to index.html. */
+function designTokenFonts(): Plugin {
+  return {
+    name: "design-token-fonts",
+    transformIndexHtml() {
+      if (!fontStylesheet) return [];
+      const stylesheet = { tag: "link", attrs: { rel: "stylesheet", href: fontStylesheet }, injectTo: "head" as const };
+      // A local path such as "/fonts/fonts.css" needs no preconnect.
+      if (!/^https?:\/\//.test(fontStylesheet)) return [stylesheet];
+      const origin = new URL(fontStylesheet).origin;
+      // Google Fonts serves the font files from a second origin.
+      const preconnect =
+        origin === "https://fonts.googleapis.com" ? [origin, "https://fonts.gstatic.com"] : [origin];
+      return [
+        ...preconnect.map((href) => ({
+          tag: "link",
+          attrs: { rel: "preconnect", href, crossorigin: href !== origin },
+          injectTo: "head" as const,
+        })),
+        stylesheet,
+      ];
+    },
+  };
+}
+
+export default defineConfig({
+  plugins: [react(), designTokenFonts()],
+  server: {
+    proxy: {
+      "/api": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+      "/health": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+{% if auth_provider == 'google' %}      // Google sign-in. Keep the browser's Host header (changeOrigin: false):
+      // the backend sends sign-in to APP_BASE_URL, so with Vite set
+      // APP_BASE_URL=http://localhost:5173 and register
+      // http://localhost:5173/auth/callback in Google Cloud Console.
+      "/auth": {
+        target: "http://localhost:8000",
+        changeOrigin: false,
+      },
+{% endif %}    },
+  },
+});

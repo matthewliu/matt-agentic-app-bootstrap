@@ -1,0 +1,34 @@
+import { useLogto } from "@logto/react";
+
+export default function LoginPage() {
+  const { signIn, isAuthenticated } = useLogto();
+
+  // Already authenticated — redirect home
+  if (isAuthenticated) {
+    window.location.href = "/";
+    return null;
+  }
+
+  const handleSignIn = () => {
+    signIn(`${window.location.origin}/callback`);
+  };
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-bg-primary">
+      <div className="w-full max-w-sm rounded-lg bg-bg-secondary border border-border-subtle p-8 shadow-md text-center">
+        <h1 className="font-heading text-2xl font-bold text-text-primary mb-2">
+          {{ app_name }}
+        </h1>
+        <p className="text-text-secondary font-body mb-6">
+          Sign in to continue.
+        </p>
+        <button
+          onClick={handleSignIn}
+          className="w-full rounded-md bg-accent px-4 py-3 font-body font-medium text-white hover:bg-accent-hover transition-colors duration-fast"
+        >
+          Sign In
+        </button>
+      </div>
+    </div>
+  );
+}

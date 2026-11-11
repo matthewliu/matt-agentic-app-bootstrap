@@ -1,0 +1,31 @@
+# EAS Build — files to exclude from upload
+# CRITICAL: Use leading slashes on root-level exclusions (lesson #10)
+# Without leading slash, patterns match at ANY depth — /app/ would also exclude mobile/app/
+
+# Python backend (not needed in mobile build)
+/app/
+/.venv/
+*.pyc
+__pycache__/
+
+# Tests
+/tests/
+
+# Frontend web app (not needed in mobile build)
+/frontend/
+
+# Git
+/.git/
+
+# Config files
+/.github/
+/docs/
+*.md
+Dockerfile
+railway.json
+pyproject.toml
+requirements.txt
+start.sh
+
+# Local env (not for EAS builds — use eas.json env blocks instead)
+mobile/.env

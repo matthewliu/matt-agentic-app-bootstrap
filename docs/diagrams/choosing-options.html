@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Choose sign-in and hosting</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #fafafa;
+      --color-ink:     #18181b;
+      --color-muted:   #52525b;
+      --color-accent:  #4f46e5;
+      --font-sans:     'Figtree', system-ui, sans-serif;
+      --font-title:    'Urbanist', system-ui, sans-serif;
+      --font-mono:     ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-title);
+      font-size: 1.75rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+
+    svg { width: 100%; min-width: 960px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Flowchart · Setup choices</p>
+    <h1>Choose sign-in and hosting</h1>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="choosing-options-title choosing-options-desc">
+        <title id="choosing-options-title">Choose sign-in and hosting</title>
+        <desc id="choosing-options-desc">Two independent choices: use Google sign-in unless you need the mobile app or one login across many apps, then Logto; host on Render unless you already committed to Railway, which is marked as risky.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#52525b"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f46e5"/></marker>
+          <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2563eb"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#fafafa"/>
+
+        <!-- Independence note (top, read first) -->
+        <text x="40" y="52" fill="#52525b" font-size="11" font-family="'Figtree', system-ui, sans-serif">Two separate choices. Any sign-in works with any host.</text>
+
+        <!-- Zones -->
+        <rect x="40" y="72" width="424" height="304" rx="8" fill="rgba(24,24,27,0.02)" stroke="rgba(24,24,27,0.10)" stroke-width="0.8"/>
+        <rect x="52" y="76" width="104" height="12" rx="2" fill="#fafafa"/>
+        <text x="104" y="85" fill="#6b6b76" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.14em">CHOICE 1 · SIGN-IN</text>
+
+        <rect x="496" y="72" width="424" height="304" rx="8" fill="rgba(24,24,27,0.02)" stroke="rgba(24,24,27,0.10)" stroke-width="0.8"/>
+        <rect x="508" y="76" width="104" height="12" rx="2" fill="#fafafa"/>
+        <text x="560" y="85" fill="#6b6b76" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.14em">CHOICE 2 · HOSTING</text>
+
+        <!-- Arrows (drawn before nodes) -->
+        <!-- Sign-in: NO → Google -->
+        <path d="M 156,172 H 154 Q 146,172 146,180 V 280" fill="none" stroke="#52525b" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <!-- Sign-in: YES → Logto -->
+        <path d="M 348,172 H 350 Q 358,172 358,180 V 280" fill="none" stroke="#52525b" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <!-- Hosting: NO → Render -->
+        <path d="M 612,172 H 610 Q 602,172 602,180 V 280" fill="none" stroke="#52525b" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <!-- Hosting: YES → Railway -->
+        <path d="M 804,172 H 806 Q 814,172 814,180 V 280" fill="none" stroke="#52525b" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- Arrow labels (beside vertical segments, 8px gap) -->
+        <rect x="114" y="248" width="24" height="12" rx="2" fill="#fafafa"/>
+        <text x="126" y="257" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">NO</text>
+        <rect x="366" y="248" width="28" height="12" rx="2" fill="#fafafa"/>
+        <text x="380" y="257" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+        <rect x="570" y="248" width="24" height="12" rx="2" fill="#fafafa"/>
+        <text x="582" y="257" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">NO</text>
+        <rect x="822" y="248" width="28" height="12" rx="2" fill="#fafafa"/>
+        <text x="836" y="257" fill="#6b6b76" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+        <!-- Decision 1 -->
+        <polygon points="252,108 348,172 252,236 156,172" fill="#ffffff" stroke="#18181b" stroke-width="1"/>
+        <text x="252" y="162" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Need the mobile</text>
+        <text x="252" y="176" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">app, or one login</text>
+        <text x="252" y="190" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">across many apps?</text>
+
+        <!-- Decision 2 -->
+        <polygon points="708,108 804,172 708,236 612,172" fill="#ffffff" stroke="#18181b" stroke-width="1"/>
+        <text x="708" y="169" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Already committed</text>
+        <text x="708" y="183" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">to Railway?</text>
+
+        <!-- Result: Google sign-in (default) -->
+        <rect x="56" y="280" width="180" height="80" rx="20" fill="#fafafa"/>
+        <rect x="56" y="280" width="180" height="80" rx="20" fill="rgba(24,24,27,0.03)" stroke="rgba(24,24,27,0.30)" stroke-width="1"/>
+        <rect x="122" y="290" width="48" height="12" rx="2" fill="none" stroke="rgba(82,82,91,0.40)" stroke-width="0.8"/>
+        <text x="146" y="299" fill="#52525b" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">DEFAULT</text>
+        <text x="146" y="322" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Google sign-in</text>
+        <text x="146" y="337" fill="#52525b" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">per-app Google client</text>
+        <text x="146" y="349" fill="#52525b" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">email allowlist</text>
+
+        <!-- Result: Logto -->
+        <rect x="268" y="280" width="180" height="80" rx="20" fill="#fafafa"/>
+        <rect x="268" y="280" width="180" height="80" rx="20" fill="rgba(24,24,27,0.03)" stroke="rgba(24,24,27,0.30)" stroke-width="1"/>
+        <rect x="336" y="290" width="44" height="12" rx="2" fill="none" stroke="rgba(82,82,91,0.40)" stroke-width="0.8"/>
+        <text x="358" y="299" fill="#52525b" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">OPTION</text>
+        <text x="358" y="322" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Logto</text>
+        <text x="358" y="337" fill="#52525b" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">--auth-provider logto</text>
+        <text x="358" y="349" fill="#52525b" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">you host Logto yourself</text>
+
+        <!-- Result: Render (default) -->
+        <rect x="512" y="280" width="180" height="80" rx="20" fill="#fafafa"/>
+        <rect x="512" y="280" width="180" height="80" rx="20" fill="rgba(24,24,27,0.03)" stroke="rgba(24,24,27,0.30)" stroke-width="1"/>
+        <rect x="578" y="290" width="48" height="12" rx="2" fill="none" stroke="rgba(82,82,91,0.40)" stroke-width="0.8"/>
+        <text x="602" y="299" fill="#52525b" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">DEFAULT</text>
+        <text x="602" y="322" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Render</text>
+        <text x="602" y="337" fill="#52525b" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">render.yaml Blueprint</text>
+        <text x="602" y="349" fill="#52525b" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">you approve costs</text>
+
+        <!-- Result: Railway (focal, risk marker) -->
+        <rect x="724" y="280" width="180" height="80" rx="20" fill="#fafafa"/>
+        <rect x="724" y="280" width="180" height="80" rx="20" fill="rgba(79,70,229,0.08)" stroke="#4f46e5" stroke-width="1.2"/>
+        <rect x="792" y="290" width="44" height="12" rx="2" fill="none" stroke="rgba(79,70,229,0.50)" stroke-width="0.8"/>
+        <text x="814" y="299" fill="#4f46e5" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">OPTION</text>
+        <text x="814" y="322" fill="#18181b" font-size="12" font-weight="600" font-family="'Figtree', system-ui, sans-serif" text-anchor="middle">Railway</text>
+        <text x="814" y="337" fill="#52525b" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">--deploy-target railway</text>
+        <text x="814" y="349" fill="#4f46e5" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">risky</text>
+
+        <!-- Callout beside Railway (margin below the hosting zone) -->
+        <path d="M 868,392 Q 868,376 868,364" fill="none" stroke="rgba(24,24,27,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
+        <circle cx="868" cy="362" r="2" fill="#18181b"/>
+        <text x="904" y="412" fill="#18181b" font-size="14" font-style="italic" font-family="'Urbanist', system-ui, sans-serif" text-anchor="end">Oct 2026: Railway reported customer env vars</text>
+        <text x="904" y="432" fill="#18181b" font-size="14" font-style="italic" font-family="'Urbanist', system-ui, sans-serif" text-anchor="end">were decrypted. The Railway path also creates</text>
+        <text x="904" y="452" fill="#18181b" font-size="14" font-style="italic" font-family="'Urbanist', system-ui, sans-serif" text-anchor="end">paid resources for you.</text>
+
+        <!-- Legend -->
+        <line x1="40" y1="540" x2="920" y2="540" stroke="rgba(24,24,27,0.10)" stroke-width="0.8"/>
+        <text x="40" y="556" fill="#52525b" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="0.14em">LEGEND</text>
+
+        <polygon points="52,572 64,578 52,584 40,578" fill="#ffffff" stroke="#18181b" stroke-width="1"/>
+        <text x="72" y="581" fill="#52525b" font-size="9" font-family="'Figtree', system-ui, sans-serif">Question</text>
+
+        <rect x="200" y="572" width="24" height="12" rx="6" fill="rgba(24,24,27,0.03)" stroke="rgba(24,24,27,0.30)" stroke-width="1"/>
+        <text x="232" y="581" fill="#52525b" font-size="9" font-family="'Figtree', system-ui, sans-serif">Result</text>
+
+        <rect x="360" y="572" width="24" height="12" rx="6" fill="rgba(79,70,229,0.08)" stroke="#4f46e5" stroke-width="1.2"/>
+        <text x="392" y="581" fill="#52525b" font-size="9" font-family="'Figtree', system-ui, sans-serif">Risky result</text>
+
+        <rect x="520" y="572" width="48" height="12" rx="2" fill="none" stroke="rgba(82,82,91,0.40)" stroke-width="0.8"/>
+        <text x="544" y="581" fill="#52525b" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">DEFAULT</text>
+        <text x="576" y="581" fill="#52525b" font-size="9" font-family="'Figtree', system-ui, sans-serif">Default choice</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>
