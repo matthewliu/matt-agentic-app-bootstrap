@@ -289,7 +289,7 @@ def init_keystore(
     """
     json_mode = bool(ctx.obj and ctx.obj.get("json"))
 
-    # Read ./.env and ~/.agentic-apps.env like create-app does, so the README
+    # Read ./.env like create-app does, so the README
     # setup (values in .env) works. Exported shell values still win.
     from agentic_core.cli import _load_env_files
 

@@ -73,7 +73,6 @@ class TestGoogleRender:
         config = (google_app / "app/config.py").read_text()
         auth_part = config.split("class AuthSettings", 1)[1]
         assert '"env_file": ".env"' in auth_part
-        assert "_SHARED_ENV" not in auth_part
 
     def test_least_scopes_and_pkce(self, google_app):
         routes = (google_app / "app/routes/auth.py").read_text()
@@ -146,7 +145,9 @@ def test_google_default_has_no_mobile(copier_copy):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("doc", ["README.md", "CLAUDE.md", "AGENTS.md", ".env.example"])
+@pytest.mark.parametrize(
+    "doc", ["README.md", "CLAUDE.md", "AGENTS.md", "PRODUCT.md", ".env.example"]
+)
 def test_google_render_docs_never_mention_railway_or_logto_setup(google_app, doc):
     content = (google_app / doc).read_text()
     assert "railway" not in content.lower(), doc
@@ -171,15 +172,13 @@ def test_google_readme_points_to_machine_credential_and_two_step_revocation(goog
 def test_google_config_has_no_logto_text_and_one_blank_line(google_app):
     config = (google_app / "app" / "config.py").read_text()
     assert "logto" not in config.lower()
-    assert "Google sign-in and\n# agent key settings never load from it" in config
+    assert "# app's own `.env`. No file that other apps share is read" in config
     # Exactly one blank line between the database setting and the CORS block.
     assert '"postgresql+asyncpg://localhost:5432/gapp"\n\n    # CORS\n' in config
 
 
-def test_logto_config_keeps_its_comment_and_spacing(logto_app):
-    """The Logto render must stay byte-identical; pin the two lines D5 touched."""
+def test_logto_config_keeps_its_spacing(logto_app):
+    """Pin the Logto blank lines. The shared-env comment left on purpose (PR a)."""
     config = (logto_app / "app" / "config.py").read_text()
-    comment = "# Shared platform credentials (Logto M2M, Railway token) live here"
-    assert f"{comment}\n_SHARED_ENV" in config
     assert ':5432/lapp"\n\n    # Logto auth\n' in config
     assert '    logto_native_app_id: str = ""\n\n    # CORS\n' in config

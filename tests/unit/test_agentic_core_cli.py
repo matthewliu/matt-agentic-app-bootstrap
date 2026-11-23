@@ -777,7 +777,7 @@ class TestTeardownCommand:
         monkeypatch.setattr(
             cli.keystore, "decrypt_credential", lambda env, pw: bytearray(b"cred")
         )
-        # Never load the developer's real ./.env or ~/.agentic-apps.env.
+        # Never load the developer's real ./.env.
         monkeypatch.setattr(cli, "_load_env_files", lambda: None)
 
     def test_teardown_loads_env_files_before_the_keystore(self, runner, monkeypatch):

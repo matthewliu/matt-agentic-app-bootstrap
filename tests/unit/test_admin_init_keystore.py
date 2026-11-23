@@ -79,7 +79,7 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv("LOGTO_M2M_APP_SECRET", raising=False)
     monkeypatch.delenv("LOGTO_ENDPOINT", raising=False)
     monkeypatch.delenv("AGENTIC_CORE_ADMIN_KEYSTORE", raising=False)
-    # Never load the developer's real ./.env or ~/.agentic-apps.env.
+    # Never load the developer's real ./.env.
     monkeypatch.setattr(cli, "_load_env_files", lambda: None)
     yield
 

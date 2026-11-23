@@ -1,6 +1,6 @@
 /**
  * Shared TypeScript types mirroring backend Pydantic models.
- * Keep in sync with app/models/ — see CLAUDE.md for the 3-place update rule.
+ * Keep in sync with app/models/ — see AGENTS.md, "Type sync contract", for the 3-place update rule.
  */
 
 export interface Item {

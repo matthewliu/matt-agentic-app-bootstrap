@@ -2,6 +2,8 @@
 
 {{ app_description }}
 
+Fill in `PRODUCT.md` first. It tells people and coding agents what this app is for and what it does not do. `AGENTS.md` holds the rules that every coding agent follows.
+
 ## Quick Start
 
 This app needs Python 3.12 or newer. Check with `python3 --version`. If it shows an older version, use a newer Python's command (for example `python3.12`) in place of `python3`.
@@ -37,7 +39,21 @@ FastAPI auto-generates interactive API docs:
 - **Swagger UI:** [http://localhost:8000/docs](http://localhost:8000/docs)
 - **ReDoc:** [http://localhost:8000/redoc](http://localhost:8000/redoc)
 
-## Development
+{% if include_backend %}## llms.txt (public apps only)
+
+`GET /llms.txt` serves a Markdown index of this app's public pages and public API ([llms.txt spec](https://llmstxt.org)). `GET /llms-openapi.json` serves an OpenAPI document that holds the public API routes only. Coding agents can read both to learn the public API. AI answer engines do not say that they use llms.txt to pick citations, so do not expect it to change rankings.
+
+Both routes are off by default and return 404. To turn them on, set `LLMS_TXT_PUBLIC_URL` to the app's public origin, for example `https://my-app.com`. Set it only on the live service of an app that is meant to be public. The value loads from the process environment and this app's `.env` only.
+
+- **A new app lists nothing.** Until you mark a route or list a page, `/llms.txt` holds only the app name and description.
+- **Public API routes are opt-in.** Add `openapi_extra=PUBLIC_DOC` (from `app.routes.llms_txt`) to a route that needs no sign-in. A marked route that depends on `validate_token` is left out, and `tests/integration/test_llms_txt.py` fails. Do not mark a route that checks sign-in another way.
+- **Public pages are listed by hand.** Add them to `PUBLIC_PAGES` in `app/routes/llms_txt.py`. The backend cannot see which React pages need sign-in, so list only pages that a signed-out visitor can open. No test can check this for you.
+- **Other hosts get 404.** A Render preview, or the `onrender.com` address of an app with a custom domain, does not serve the files. This check is not access control: the content is public by design.
+- **No `llms-full.txt`.** The template has no long public text to expand into a second file.
+- **A static `frontend/public/llms.txt` is not served.** The backend route takes `/llms.txt` first and returns 404 while the setting is empty.
+- `/openapi.json`, `/docs`, and `/redoc` are a separate matter. They list every route, including protected ones, and they are public today. llms.txt does not link to them.
+
+{% endif %}## Development
 
 ```bash
 # Run tests
@@ -93,7 +109,7 @@ People sign in with their Google account. The backend does the whole OpenID Conn
 | `SESSION_MAX_AGE_SECONDS` | No | Session length. Default `28800` (8 hours). |
 | `AGENT_CREDENTIALS` | No | Agent key hashes for the CLI and MCP server. See "Agent keys". |
 
-These settings load only from this app's `.env` and the process environment. They never load from the shared `~/.agentic-apps.env`.
+These settings load only from this app's `.env` and the process environment.
 
 {% if deploy_target == "render" %}### Set up on Render
 

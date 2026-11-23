@@ -8,7 +8,7 @@
 
 ## 1. Mental Model (one paragraph)
 
-`agentic-core` is the **factory**. It creates new sibling apps next to this repo. By default, each app gets its own GitHub repo, a `render.yaml` Blueprint for Render (web service plus its own Postgres), Google sign-in for people, and agent keys for agents. Each app also gets its own Typer CLI and MCP server. **Agent isolation is fully per-app:** an agent key for App A cannot authorize a call to App B. A Google app shares no sign-in state with other apps. Logto apps (`--auth-provider logto`) share one Logto account for people but still issue per-app tokens. Read `CLAUDE.md`, "Security boundaries", before you change anything that touches sign-in or agent credentials.
+`agentic-core` is the **factory**. It creates new sibling apps next to this repo. By default, each app gets its own GitHub repo, a `render.yaml` Blueprint for Render (web service plus its own Postgres), Google sign-in for people, and agent keys for agents. Each app also gets its own Typer CLI and MCP server. **Agent isolation is fully per-app:** an agent key for App A cannot authorize a call to App B. A Google app shares no sign-in state with other apps. Logto apps (`--auth-provider logto`) share one Logto account for people but still issue per-app tokens. Read `AGENTS.md`, "Security boundaries", before you change anything that touches sign-in or agent credentials.
 
 ---
 
@@ -121,7 +121,7 @@ Read `error_code` (stable, machine-readable) alongside `retryable`:
 **Prerequisites the human has done for you:**
 - `agentic-core` is installed (CLI on PATH)
 - `~/.agentic-core/admin.keystore.json` exists (Logto admin secret)
-- `~/.agentic-apps.env` has `LOGTO_M2M_APP_ID`, `RAILWAY_API_TOKEN`, etc.
+- `./.env` (in the folder where you run `agentic-core`) or the shell has `LOGTO_M2M_APP_ID`, `RAILWAY_API_TOKEN`, etc.
 - `gh` and `railway` CLIs are authenticated
 
 **Step 1: Discover the surface.**
@@ -390,7 +390,7 @@ curl -X POST "$<APP>_LOGTO_ENDPOINT/oidc/token" \
 
 ## 12. Where to read more
 
-- `CLAUDE.md` — project-level context, including the "Security boundaries" section that explains the per-app isolation of sign-in and agent credentials
+- `AGENTS.md` — project-level context for every coding agent (`CLAUDE.md` imports it), including the "Security boundaries" section that explains the per-app isolation of sign-in and agent credentials
 - `docs/SECURITY.md` — threat model, keystore lifecycle, 8 spec invariants (the JWT validation rules the middleware enforces)
 - `docs/logto-setup-guide.md` — Logto integration details (endpoints, JWKS, claims)
 - `docs/bootstrap-process-flow.md` — step-by-step bootstrap walkthrough (what each phase does)

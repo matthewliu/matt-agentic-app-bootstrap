@@ -70,3 +70,36 @@ def test_generated_google_app_passes_ruff(google_app):
         timeout=60,
     )
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+def test_generated_settings_ignore_a_shared_home_env_file(google_app, tmp_path):
+    """A ``~/.agentic-apps.env`` must not reach a generated app.
+
+    The old shared file let one ``CORS_ORIGINS`` or ``DATABASE_URL`` value
+    configure every app on the machine. The run starts from an empty
+    environment with only ``HOME`` and ``PATH`` set, plus the Render URL.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".agentic-apps.env").write_text(
+        "CORS_ORIGINS=https://attacker.example\n"
+        "DATABASE_URL=postgresql://shared@shared-host/shared\n"
+    )
+    code = (
+        "from app.config import settings; "
+        "print(settings.cors_origins_list); print(settings.database_url)"
+    )
+    result = subprocess.run(
+        [str(google_app / ".venv" / "bin" / "python"), "-c", code],
+        cwd=str(google_app), capture_output=True, text=True, timeout=60,
+        env={
+            "HOME": str(home),
+            "PATH": "/usr/bin:/bin",
+            "RENDER_EXTERNAL_URL": "https://gapp.onrender.com",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert "attacker.example" not in result.stdout
+    assert "shared-host" not in result.stdout
+    assert "['https://gapp.onrender.com']" in result.stdout
+    assert "postgresql+asyncpg://localhost:5432/google_integ_app" in result.stdout

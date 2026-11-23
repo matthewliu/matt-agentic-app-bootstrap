@@ -16,8 +16,8 @@ from fastapi.staticfiles import StaticFiles
 {% if auth_provider == 'google' %}from app.auth.middleware import session_middleware_kwargs
 {% endif %}from app.config import settings
 from app.db.engine import engine
-{% if auth_provider == 'google' %}from app.routes import auth, health, items
-{% else %}from app.routes import health, items
+{% if auth_provider == 'google' %}from app.routes import auth, health, items, llms_txt
+{% else %}from app.routes import health, items, llms_txt
 {% endif %}
 
 @asynccontextmanager
@@ -76,6 +76,8 @@ async def generic_exception_handler(request: Request, exc: Exception):
 app.include_router(health.router)
 {% if auth_provider == 'google' %}app.include_router(auth.router)
 {% endif %}app.include_router(items.router, prefix="/api")
+# GET /llms.txt: off (404) until LLMS_TXT_PUBLIC_URL is set.
+app.include_router(llms_txt.router)
 {% if include_frontend %}
 
 # WARNING: All API routers must be included BEFORE this catch-all.

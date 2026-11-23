@@ -64,8 +64,8 @@ def test_backend_only_app_has_no_design_md(copier_copy):
     assert not (app / "DESIGN.md").exists()
 
 
-def test_claude_md_points_to_design_md(google_app):
-    assert "DESIGN.md" in (google_app / "CLAUDE.md").read_text()
+def test_agents_md_points_to_design_md(google_app):
+    assert "DESIGN.md" in (google_app / "AGENTS.md").read_text()
 
 
 def _hex_pairs(tokens: str, theme: str) -> dict[str, str]:

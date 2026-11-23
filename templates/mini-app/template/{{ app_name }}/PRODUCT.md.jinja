@@ -1,0 +1,35 @@
+# {{ app_name }}: product
+
+{{ app_description }}
+
+This file says what the app is for. People and coding agents read it before they add a feature. Keep it short and current. Replace each prompt below with your answer. Write "Not decided" when you do not know yet.
+
+## Who it is for
+
+- Who uses the app? Name the people{% if include_cli %} and the agents (CLI or MCP){% endif %}.
+- Is the app public, or for a private list of people?{% if include_backend %} (A private app keeps `LLMS_TXT_PUBLIC_URL` empty.){% endif %}
+
+## Problem
+
+- What problem does it solve? What do people do today without it?
+
+## What it does
+
+- List the few things the app must do well. One line each.
+
+## What it does not do
+
+- List the features you chose to leave out, and why. Agents must not add them without asking.
+
+## How we know it works
+
+- What do you measure? For example: weekly active people, agent calls, or one task completed per visit.
+
+## Data and privacy
+
+- What personal data does the app store? Who can see it?
+- Does the app send data to an AI provider? Which data?
+
+## Open questions
+
+- List decisions that are still open.
