@@ -90,20 +90,18 @@ app.add_typer(admin_app, name="admin")
 
 
 def _load_env_files() -> None:
-    """Load credential env files so ``agentic-core`` works without the caller
-    first running ``set -a; source .env``.
+    """Load ``./.env`` so ``agentic-core`` works without the caller first
+    running ``set -a; source .env``.
 
-    Precedence, highest first: already-exported shell vars > ``./.env`` >
-    ``~/.agentic-apps.env``. ``load_dotenv(override=False)`` never clobbers a
-    value already present in ``os.environ``, so loading the higher-priority
-    file first makes it win. Missing files are silently skipped. This mirrors
-    the generated app's pydantic ``env_file=(~/.agentic-apps.env, ".env")``
-    resolution, keeping the CLI and the deployed backend on one rule.
+    This function loads ``./.env`` only. Already-exported shell vars win:
+    ``load_dotenv(override=False)`` never clobbers a value already present in
+    ``os.environ``. A missing file is skipped. The old shared settings file
+    ``~/.agentic-apps.env`` is not loaded: one value in it reached every app.
+    (The Logto admin keystore and token cache are separate credential stores.)
     """
     from dotenv import load_dotenv
 
     load_dotenv(Path.cwd() / ".env", override=False)
-    load_dotenv(Path.home() / ".agentic-apps.env", override=False)
 
 
 def _version_callback(value: bool) -> None:
@@ -586,7 +584,7 @@ def create_app_cmd(  # noqa: PLR0913 — Typer params, not internal kwargs
     resolved_with_deploy = not no_deploy
     resolved_with_github = not no_github
 
-    # Populate os.environ from ./.env + ~/.agentic-apps.env before preflight,
+    # Populate os.environ from ./.env before preflight,
     # which reads RAILWAY_API_TOKEN straight off the environment. Without this
     # a bare `agentic-core create-app` fails PREFLIGHT_ENV_MISSING even though
     # the token is sitting in .env. Exported shell vars still win.
@@ -887,7 +885,7 @@ def teardown_cmd(
     # a manual teardown run some time after the bootstrap. Decrypt like
     # create-app does (getpass prompt unless --passphrase-fd), so teardown works
     # standalone regardless of cache state.
-    # Read ./.env and ~/.agentic-apps.env like create-app does: teardown needs
+    # Read ./.env like create-app does: teardown needs
     # LOGTO_ENDPOINT and LOGTO_M2M_APP_ID from there. Exported values win.
     _load_env_files()
     admin_credential: bytearray | None = None

@@ -294,3 +294,89 @@ def test_update_without_deploy_target_answer_keeps_railway(tmp_path):
     assert not (app_dir / "render.yaml").exists()
     assert not (app_dir / "tests" / "unit" / "test_render_blueprint.py").exists()
     assert "Local edit that must survive." in readme.read_text()
+
+
+def _publish(template_repo, tag):
+    _git(template_repo, "add", "-A")
+    _git(template_repo, "commit", "--quiet", "-m", tag)
+    _git(template_repo, "tag", tag)
+
+
+def _update_from_parent(dst, app_name):
+    return subprocess.run(
+        [
+            COPIER_BIN, "update", str(dst),
+            "-a", f"{app_name}/.copier-answers.yml",
+            "--trust", "--skip-tasks", "--defaults",
+        ],
+        capture_output=True, text=True, timeout=120,
+    )
+
+
+def test_update_creates_product_md_once_and_keeps_owner_text(tmp_path):
+    """`copier update` adds PRODUCT.md to an old app, then never overwrites it.
+
+    v1 is the template without PRODUCT.md (an app made before it existed).
+    v2 adds it. v3 changes both PRODUCT.md and README.md. The owner's
+    PRODUCT.md text must stay byte-identical through v3, while the README
+    change still applies, so the update really ran. Without the
+    `_skip_if_exists` entry, v3 merges the template change into the owner's
+    file and this test fails.
+    """
+    import shutil
+
+    import yaml
+
+    template_repo = tmp_path / "template-repo"
+    shutil.copytree(
+        TEMPLATE_DIR, template_repo, ignore=shutil.ignore_patterns("__pycache__")
+    )
+    app_tpl = template_repo / "template" / "{{ app_name }}"
+    product_tpl = app_tpl / "PRODUCT.md.jinja"
+    product_source = product_tpl.read_text()
+    product_tpl.unlink()
+    _git(template_repo, "init", "--quiet")
+    _publish(template_repo, "v1")
+
+    dst = tmp_path / "output"
+    dst.mkdir()
+    app_name = "product-update-app"
+    copy = subprocess.run(
+        [
+            COPIER_BIN, "copy", str(template_repo), str(dst),
+            "--trust", "--skip-tasks", "--defaults", "--vcs-ref", "v1",
+            "--data", f"app_name={app_name}",
+            "--data", "include_frontend=false",
+        ],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert copy.returncode == 0, copy.stderr
+    app_dir = dst / app_name
+    product = app_dir / "PRODUCT.md"
+    assert not product.exists()
+    _git(dst, "init", "--quiet")
+    _git(dst, "add", "-A")
+    _git(dst, "commit", "--quiet", "-m", "app from v1")
+
+    product_tpl.write_text(product_source)
+    _publish(template_repo, "v2")
+    update = _update_from_parent(dst, app_name)
+    assert update.returncode == 0, update.stderr
+    assert product.read_text().startswith(f"# {app_name}: product\n")
+
+    owner_text = "# Owner answers\n\nThis app tracks bird sightings for one family.\n"
+    product.write_text(owner_text)
+    _git(dst, "add", "-A")
+    _git(dst, "commit", "--quiet", "-m", "owner fills in PRODUCT.md")
+
+    product_tpl.write_text(product_source + "\n## Template line added in v3\n")
+    readme_tpl = app_tpl / "README.md.jinja"
+    readme_tpl.write_text(readme_tpl.read_text() + "\nREADME line added in v3.\n")
+    _publish(template_repo, "v3")
+    update = _update_from_parent(dst, app_name)
+    assert update.returncode == 0, update.stderr
+
+    answers = yaml.safe_load((app_dir / ".copier-answers.yml").read_text())
+    assert answers["_commit"] == "v3"
+    assert "README line added in v3." in (app_dir / "README.md").read_text()
+    assert product.read_text() == owner_text

@@ -17,7 +17,7 @@ documented:
 2. **The shared ``agentic-core-admin`` app is never a delete target.** Its
    app id (``LOGTO_M2M_APP_ID`` env, or the ``admin_app_id`` arg) is checked
    against every Logto id BEFORE any DELETE. Deleting it would break the whole
-   bootstrap pipeline (see ``CLAUDE.md``). Any id matching it is skipped and
+   bootstrap pipeline (see ``AGENTS.md``). Any id matching it is skipped and
    reported under ``skipped_admin`` — even if it erroneously appears in an
    app's ``resource_ids``.
 

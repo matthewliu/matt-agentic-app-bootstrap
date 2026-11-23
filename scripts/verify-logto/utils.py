@@ -7,11 +7,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
-# Load shared platform credentials, then repo .env overrides
+# Load the repo .env. Exported shell values win. No shared home-directory file.
 _repo_root = Path(__file__).parent.parent.parent
-_shared_env = Path(os.environ.get("SHARED_ENV_FILE", Path.home() / ".agentic-apps.env"))
-load_dotenv(_shared_env)  # shared platform credentials (loaded first)
-load_dotenv(_repo_root / ".env")  # local overrides (won't overwrite existing)
+load_dotenv(_repo_root / ".env")
 
 
 def get_env(key: str) -> str:

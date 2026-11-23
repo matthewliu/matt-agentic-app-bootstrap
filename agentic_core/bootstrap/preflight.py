@@ -232,7 +232,10 @@ def run_preflight(
             return _fail(
                 error_code="PREFLIGHT_ENV_MISSING",
                 exit_code=EXIT_MISCONFIG,
-                message=f"{ENV_RAILWAY_API_TOKEN} is not set in the environment.",
+                message=(
+                    f"{ENV_RAILWAY_API_TOKEN} is not set in the environment. "
+                    "Set it in ./.env (the folder where you run agentic-core) or export it."
+                ),
             )
 
     # --- Logto: env + keystore ---------------------------------------
@@ -247,7 +250,10 @@ def run_preflight(
             return _fail(
                 error_code="PREFLIGHT_ENV_MISSING",
                 exit_code=EXIT_MISCONFIG,
-                message=f"{ENV_LOGTO_M2M_APP_ID} is not set (and no --admin-app-id given).",
+                message=(
+                    f"{ENV_LOGTO_M2M_APP_ID} is not set (and no --admin-app-id given). "
+                    "Set it in ./.env (the folder where you run agentic-core) or export it."
+                ),
             )
         # Logto API identifiers are https://<slug>.<platform_domain>/api.
         # There is no built-in domain: each operator names their own.

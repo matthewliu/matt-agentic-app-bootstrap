@@ -161,7 +161,7 @@ New Render apps use Google sign-in instead of Logto. A Google-mode app meets the
 | 2. Per-app audience | One Google OAuth client per app. The backend accepts an ID token only when `aud` is exactly the app's `GOOGLE_CLIENT_ID`. No Google token is ever accepted as an API credential. |
 | 3. Per-app human session | The session cookie is signed with the app's own `SESSION_SECRET`, is HttpOnly and SameSite=Lax, and on https is Secure with the `__Host-` prefix. Only emails in `AUTH_ALLOWED_EMAILS` get access. |
 | 4. No admin client at runtime | Unchanged. Google mode uses no admin client at all. |
-| 5. One secret store per app | The Google and agent key settings load only from the app's own `.env` and process environment, never from the shared `~/.agentic-apps.env`. On Render they are `sync: false` service variables; Render generates `SESSION_SECRET`. |
+| 5. One secret store per app | Every setting of a generated app loads only from the app's own `.env` and process environment. No generated app and no `agentic-core` command loads the old shared settings file `~/.agentic-apps.env`. On Render, the Google and agent key settings are `sync: false` service variables; Render generates `SESSION_SECRET`. |
 | 6. Per-app rotation | Rotate the Google client secret, `SESSION_SECRET` (signs everybody out), or one agent key without touching another app. |
 | 7. Audit-friendly logging | One JSON line per auth decision: app slug, auth method, user ID, agent key ID, decision. Never an email, a token, or a key. |
 | 8. No long-lived secrets in source | `.gitignore` adds `*.agent-key`. The operator tool writes keys to a new 0600 file and never prints them. |

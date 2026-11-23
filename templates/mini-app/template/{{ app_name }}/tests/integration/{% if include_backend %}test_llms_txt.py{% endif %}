@@ -1,0 +1,316 @@
+"""GET /llms.txt and /llms-openapi.json: off by default, canonical host only, public routes only."""
+
+import pytest
+from fastapi import APIRouter, Depends, FastAPI, Security
+from fastapi.security import HTTPBearer
+from httpx import AsyncClient
+from pydantic import BaseModel
+
+from app.auth.middleware import get_current_user_id, require_scope, validate_token
+from app.config import LlmsTxtSettings, llms_txt_settings
+from app.main import app
+from app.routes import llms_txt
+from app.routes.llms_txt import (
+    PUBLIC_DOC,
+    PublicPage,
+    api_routes,
+    build_llms_txt,
+    public_openapi,
+    requires_auth,
+)
+
+ORIGIN = "http://test"  # the async_client base URL
+SCHEMA_URL = ORIGIN + llms_txt.OPENAPI_PATH
+PATHS = ["/llms.txt", llms_txt.OPENAPI_PATH]
+ITEM_ID = "{item_id}"  # a literal path parameter in an expected line
+
+
+@pytest.fixture
+def enabled(monkeypatch):
+    monkeypatch.setattr(llms_txt_settings, "llms_txt_public_url", ORIGIN)
+
+
+def _operations(target: FastAPI, *, protected: bool) -> set[tuple[str, str]]:
+    """(method, path) pairs of the routes that do, or do not, require sign-in."""
+    return {
+        (method, route.path)
+        for route in api_routes(target)
+        if requires_auth(route) == protected
+        for method in route.methods - {"HEAD", "OPTIONS"}
+    }
+
+
+def _listed(body: str) -> set[tuple[str, str]]:
+    """(method, path) pairs listed in the llms.txt API section."""
+    listed = set()
+    _, _, api = body.partition("\n## API\n")
+    for line in api.splitlines():
+        if line.startswith("- [") and "](" in line:
+            method, _, path = line[3 : line.index("](")].partition(" ")
+            if path.startswith("/"):
+                listed.add((method, path))
+    return listed
+
+
+def _documented(schema: dict) -> set[tuple[str, str]]:
+    return {(m.upper(), p) for p, ops in schema.get("paths", {}).items() for m in ops}
+
+
+class PublicModel(BaseModel):
+    shown: str
+
+
+class SecretModel(BaseModel):
+    secret_field: str
+
+
+def _demo_app() -> FastAPI:
+    """Every way a route can require sign-in, each one marked public, plus public routes."""
+    demo = FastAPI(title="demo")
+
+    @demo.get("/direct", openapi_extra=PUBLIC_DOC)
+    async def direct(claims: dict = Depends(validate_token)):
+        return claims
+
+    @demo.get("/security", openapi_extra=PUBLIC_DOC)
+    async def security(claims: dict = Security(validate_token)):
+        return claims
+
+    @demo.get("/user", openapi_extra=PUBLIC_DOC)
+    async def user(user_id: str = Depends(get_current_user_id)):
+        return user_id
+
+    @demo.post("/scoped", openapi_extra=PUBLIC_DOC)
+    async def scoped(claims: dict = Depends(require_scope("write"))):
+        return claims
+
+    # Same path, one public method and one protected method.
+    @demo.get("/shared", openapi_extra=PUBLIC_DOC)
+    async def shared_read():
+        """Read the shared thing."""
+        return {}
+
+    @demo.post("/shared", openapi_extra=PUBLIC_DOC)
+    async def shared_write(claims: dict = Depends(validate_token)):
+        return claims
+
+    @demo.get("/open/{item_id}", openapi_extra=PUBLIC_DOC, response_model=PublicModel)
+    async def open_route(item_id: str):
+        """A public route."""
+        return {"shown": item_id}
+
+    @demo.get("/secret-model", openapi_extra=PUBLIC_DOC, response_model=SecretModel)
+    async def secret_model(claims: dict = Depends(validate_token)):
+        return {"secret_field": "x"}
+
+    # Another security scheme, not validate_token.
+    @demo.get("/bearer", openapi_extra=PUBLIC_DOC)
+    async def bearer(token=Security(HTTPBearer())):
+        return {}
+
+    # A public route whose OpenAPI callback is protected.
+    callbacks = APIRouter()
+
+    @callbacks.post("/callback-target", response_model=SecretModel)
+    async def callback_target(claims: dict = Depends(validate_token)):
+        return {"secret_field": "x"}
+
+    @demo.get("/with-callback", openapi_extra=PUBLIC_DOC, callbacks=callbacks.routes)
+    async def with_callback():
+        return {}
+
+    @demo.get("/hidden", openapi_extra=PUBLIC_DOC, include_in_schema=False)
+    async def hidden():
+        return {}
+
+    @demo.get("/unmarked")
+    async def unmarked():
+        return {}
+
+    guarded = APIRouter(dependencies=[Depends(validate_token)])
+
+    @guarded.get("/router-level", openapi_extra=PUBLIC_DOC)
+    async def router_level():
+        return {}
+
+    included = APIRouter()
+
+    @included.get("/include-level", openapi_extra=PUBLIC_DOC)
+    async def include_level():
+        return {}
+
+    inner = APIRouter()
+
+    @inner.get("/nested", openapi_extra=PUBLIC_DOC)
+    async def nested():
+        return {}
+
+    outer = APIRouter(dependencies=[Depends(validate_token)])
+    outer.include_router(inner, prefix="/inner")
+
+    demo.include_router(guarded, prefix="/v1")
+    demo.include_router(included, prefix="/v2", dependencies=[Depends(validate_token)])
+    demo.include_router(outer, prefix="/v3")
+    return demo
+
+
+class TestServing:
+    @pytest.mark.parametrize("path", PATHS)
+    async def test_off_by_default(self, async_client: AsyncClient, monkeypatch, path):
+        assert LlmsTxtSettings.model_fields["llms_txt_public_url"].default == ""
+        monkeypatch.setattr(llms_txt_settings, "llms_txt_public_url", "")
+        response = await async_client.get(path)
+        assert response.status_code == 404
+
+    async def test_served_on_the_canonical_host(self, async_client: AsyncClient, enabled):
+        response = await async_client.get("/llms.txt")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/plain")
+        assert response.headers["cache-control"] == llms_txt.CACHE_CONTROL
+        assert response.text.startswith(f"# {app.title}\n")
+
+    @pytest.mark.parametrize("path", PATHS)
+    async def test_head_is_allowed(self, async_client: AsyncClient, enabled, path):
+        response = await async_client.head(path)
+        assert response.status_code == 200
+
+    @pytest.mark.parametrize(
+        ("host", "status"),
+        [
+            ("test", 200),
+            ("TEST", 200),
+            ("test:80", 200),  # default port for http
+            ("test:8080", 404),
+            ("other.test", 404),  # a Render preview or the onrender.com host
+            ("", 404),
+        ],
+    )
+    @pytest.mark.parametrize("path", PATHS)
+    async def test_host_must_match(self, async_client: AsyncClient, enabled, host, status, path):
+        response = await async_client.get(path, headers={"host": host})
+        assert response.status_code == status
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "my-app.com",
+            "ftp://my-app.com",
+            "https://my-app.com/docs",
+            "https://u:p@my-app.com",
+            "https://[broken",
+            "https://my-app.com:abc",
+            "https://my-app.com:",
+        ],
+    )
+    async def test_invalid_url_keeps_it_off(self, async_client: AsyncClient, monkeypatch, value):
+        monkeypatch.setattr(llms_txt_settings, "llms_txt_public_url", value)
+        response = await async_client.get("/llms.txt")
+        assert response.status_code == 404
+
+    async def test_default_port_in_setting(self, async_client: AsyncClient, monkeypatch):
+        monkeypatch.setattr(llms_txt_settings, "llms_txt_public_url", "http://TEST:80/")
+        response = await async_client.get("/llms.txt")
+        assert response.status_code == 200
+
+    async def test_public_schema_is_served(self, async_client: AsyncClient, enabled):
+        response = await async_client.get(llms_txt.OPENAPI_PATH)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == llms_txt.CACHE_CONTROL
+        assert response.json()["info"]["title"] == app.title
+
+    def test_routes_are_not_in_the_openapi_schema(self):
+        for path in PATHS:
+            assert path not in app.openapi()["paths"]
+
+
+class TestNoProtectedRoute:
+    """No route behind sign-in may appear in llms.txt or the public schema."""
+
+    def test_the_check_finds_this_apps_protected_routes(self):
+        # If FastAPI changes how it stores routes, this fails before a
+        # protected route can slip into the file.
+        protected = _operations(app, protected=True)
+        assert ("GET", "/api/items") in protected
+        assert ("DELETE", "/api/items/{item_id}") in protected
+        assert ("GET", "/health") not in protected
+
+    def test_no_marked_route_requires_sign_in(self):
+        # Fails when someone marks a protected route with PUBLIC_DOC.
+        marked = [r.path for r in api_routes(app) if llms_txt.is_marked(r) and requires_auth(r)]
+        assert marked == []
+
+    async def test_app_publishes_no_protected_op(self, async_client: AsyncClient, enabled):
+        protected = _operations(app, protected=True)
+        body = (await async_client.get("/llms.txt")).text
+        schema = (await async_client.get(llms_txt.OPENAPI_PATH)).json()
+        assert not _listed(body) & protected
+        assert not _documented(schema) & protected
+
+    def test_every_sign_in_shape_is_detected(self):
+        assert _operations(_demo_app(), protected=True) == {
+            ("GET", "/direct"),
+            ("GET", "/security"),
+            ("GET", "/user"),
+            ("POST", "/scoped"),
+            ("GET", "/secret-model"),
+            ("GET", "/bearer"),
+            ("POST", "/shared"),
+            ("GET", "/v1/router-level"),
+            ("GET", "/v2/include-level"),
+            ("GET", "/v3/inner/nested"),
+        }
+
+    def test_app_level_dependency_is_detected(self):
+        demo = FastAPI(dependencies=[Depends(validate_token)])
+
+        @demo.get("/everything", openapi_extra=PUBLIC_DOC)
+        async def everything():
+            return {}
+
+        assert _operations(demo, protected=True) == {("GET", "/everything")}
+        assert _listed(build_llms_txt(demo, ORIGIN)) == set()
+
+    def test_only_public_marked_operations_are_published(self):
+        demo = _demo_app()
+        expected = {("GET", "/shared"), ("GET", "/open/{item_id}")}
+        assert _listed(build_llms_txt(demo, ORIGIN)) == expected
+        assert _documented(public_openapi(demo)) == expected
+
+    def test_public_schema_holds_no_protected_model_or_scheme(self):
+        schema = public_openapi(_demo_app())
+        text = str(schema)
+        assert "PublicModel" in schema["components"]["schemas"]
+        for protected in ("SecretModel", "secret_field", "callback-target", "/with-callback"):
+            assert protected not in text
+        assert "securitySchemes" not in schema.get("components", {})
+
+
+class TestContent:
+    def test_minimal_file_has_title_and_summary(self):
+        demo = FastAPI(title="demo", description="Line one.\n  Line two.")
+        assert build_llms_txt(demo, ORIGIN) == "# demo\n\n> Line one. Line two.\n"
+
+    def test_blank_description_adds_no_blockquote(self):
+        assert build_llms_txt(FastAPI(title="demo", description="  \n "), ORIGIN) == "# demo\n"
+
+    def test_api_entries_link_to_the_public_schema(self):
+        body = build_llms_txt(_demo_app(), ORIGIN)
+        assert f"## API\n\n- [OpenAPI schema]({SCHEMA_URL}): " in body
+        assert f"- [GET /open/{ITEM_ID}]({SCHEMA_URL}): A public route.\n" in body
+        assert f"- [GET /shared]({SCHEMA_URL}): Read the shared thing.\n" in body
+
+    def test_pages_are_listed(self, monkeypatch):
+        page = PublicPage("/pricing", "Pricing [plans]\nand limits", "Plans.")
+        monkeypatch.setattr(llms_txt, "PUBLIC_PAGES", [page])
+        body = build_llms_txt(FastAPI(title="demo"), "https://my-app.com")
+        expected = "- [Pricing (plans) and limits](https://my-app.com/pricing): Plans.\n"
+        assert "## Pages\n\n" + expected in body
+
+    @pytest.mark.parametrize("path", ["pricing", "/a b", "/x)", "//evil.example", "/x\n"])
+    def test_bad_page_paths_are_left_out(self, monkeypatch, path):
+        monkeypatch.setattr(llms_txt, "PUBLIC_PAGES", [PublicPage(path, "Bad")])
+        assert "## Pages" not in build_llms_txt(FastAPI(title="demo"), ORIGIN)
+
+    def test_this_apps_pages_are_all_valid(self):
+        # Fails when an entry in PUBLIC_PAGES would be left out.
+        assert llms_txt.valid_pages() == llms_txt.PUBLIC_PAGES

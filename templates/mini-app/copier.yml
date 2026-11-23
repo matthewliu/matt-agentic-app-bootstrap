@@ -11,6 +11,9 @@ _answers_file: "{{ app_name }}/.copier-answers.yml"
 _skip_if_exists:
   - ".env"
   - ".claude/memory/MEMORY.md"
+  # The app owner fills PRODUCT.md in. `copier update` creates it in an old
+  # app that lacks it, but never overwrites the owner's answers.
+  - "PRODUCT.md"
 
 # The project renders into the `{{ app_name }}/` subfolder, so each task
 # must run there. Without working_directory, `git init` and the venv land

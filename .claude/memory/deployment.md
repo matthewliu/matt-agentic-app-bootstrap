@@ -45,6 +45,6 @@ Source: my-sample-notes-app live bootstrap (2026-07-15)
 - shadcn component prop mismatches: e.g., `asChild` not existing on `DialogTrigger` due to version differences
 - These errors are **invisible during `npm run dev`** — Vite HMR doesn't run tsc. They only surface in the Docker build.
 
-**Prevention:** Always run `cd frontend && npx tsc --noEmit` before deploying. This is now documented in the CLAUDE.md template (Deployment section) so future projects have the warning from day one.
+**Prevention:** Always run `cd frontend && npx tsc --noEmit` before deploying. This is now documented in the generated AGENTS.md template (Deployment section) so future projects have the warning from day one.
 
 Source: bootstrap-fixes session (2026-03-17), feedback_fullstack_deploy, an early deploy failure (2026-03-18)

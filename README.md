@@ -17,13 +17,14 @@ All three call the same FastAPI API. Only the API reads and writes the database.
 Every new app gets:
 
 - A Python FastAPI backend with a typed, documented API (`/docs`)
+- An optional `/llms.txt` file for public apps. It is off by default and lists only the routes and pages you mark as public.
 - A React web frontend with light mode, dark mode, and responsive layouts
 - A CLI and an MCP server that call the API. The MCP server offers read tools only, until you turn on writes.
 - Google sign-in for people, and agent keys for AI agents
 - Its own Postgres database, plus a `compose.yaml` file that runs Postgres on your computer
 - Tests, a linter, and GitHub Actions CI
 - A `render.yaml` file that deploys the app on [Render](https://render.com)
-- `DESIGN.md`, `CLAUDE.md`, and `AGENTS.md`, so coding agents follow the same rules
+- `AGENTS.md` (the guide every coding agent reads; `CLAUDE.md` imports it), and `PRODUCT.md` (what the app is for), so coding agents follow the same rules. An app with a web frontend also gets `DESIGN.md` (its look)
 
 This repo is not an app. It holds the app template (`templates/mini-app/`) and the `agentic-core` command that fills it in.
 
@@ -171,6 +172,8 @@ Each app has one design-token file: `frontend/src/design/tokens.ts`. It holds th
 - Every app has its own CLI and MCP server. With Google sign-in they use agent keys, never Google tokens.
 - To explain a concept to a person who is new to coding, use the [beginner guide](docs/beginner-guide.md).
 - See the [agent manual](docs/agent-manual.md).
+- `agentic-core` and the apps it creates no longer load `~/.agentic-apps.env`. If you have that file, move the values you still need into `.env` in this checkout (for the CLI) or into each app's own `.env`. Then delete the old file.
+- An app made before `AGENTS.md` became the guide can have edited rules in `CLAUDE.md`. After `copier update`, `CLAUDE.md` has conflict markers. Move the app's own rules into `AGENTS.md`. Then make `CLAUDE.md` the new short file: the title, `@AGENTS.md`, and one note. `AGENTS.md` keeps any lines that you added to it.
 
 ## Other options: Logto and Railway
 

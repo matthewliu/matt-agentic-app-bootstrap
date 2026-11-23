@@ -31,7 +31,7 @@ Every app must be usable by a person and by an AI agent, with the same rules for
 | `tests/` | Backend tests. They use SQLite in memory and a fake Google provider, so they need no network. |
 | `compose.yaml` | Local Postgres for development |
 | `render.yaml` | The Render Blueprint: one web service and one Postgres database |
-| `README.md`, `CLAUDE.md`, `AGENTS.md`, `DESIGN.md` | Instructions for people and coding agents |
+| `README.md`, `AGENTS.md`, `CLAUDE.md`, `PRODUCT.md`, `DESIGN.md` | Instructions for people and coding agents. `AGENTS.md` is the agent guide; `CLAUDE.md` imports it. `PRODUCT.md` says what the app is for. |
 
 The `lightweight-api` variant has no web app. The `--no-frontend` option removes the web app from the `full` variant.
 

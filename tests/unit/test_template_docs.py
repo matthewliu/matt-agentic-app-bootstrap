@@ -279,6 +279,7 @@ DOC_FILES = [
     "README.md",
     "CLAUDE.md",
     "AGENTS.md",
+    "PRODUCT.md",
     ".env.example",
     "AGENT_CONTEXT.md",
     ".claude/memory/MEMORY.md",
@@ -317,18 +318,18 @@ class TestRenderTargetDocs:
         assert "render ssh" in content
         assert "auth_not_configured" in content
 
-    def test_claude_md_describes_blueprint(self, tmp_path: Path):
-        content = (_render_target(tmp_path, "render") / "CLAUDE.md").read_text()
+    def test_agents_md_describes_blueprint(self, tmp_path: Path):
+        content = (_render_target(tmp_path, "render") / "AGENTS.md").read_text()
         assert "## Deployment (Render)" in content
         assert "render.yaml" in content
         assert "auth_not_configured" in content
         assert "render ssh" in content
 
-    def test_backend_only_claude_md_describes_blueprint(self, tmp_path: Path):
+    def test_backend_only_agents_md_describes_blueprint(self, tmp_path: Path):
         # The Railway deploy notes render only with a frontend. The Render
         # notes cover the Blueprint, so they render for every shape.
         rendered = _render(tmp_path, variant="full", deploy_target="render")
-        content = (rendered / "CLAUDE.md").read_text()
+        content = (rendered / "AGENTS.md").read_text()
         assert "## Deployment (Render)" in content
 
     def test_agent_context_keeps_cli_secrets_off_web_service(self, tmp_path: Path):
@@ -352,8 +353,8 @@ class TestRailwayTargetDocs:
         assert "railway.json" in content
         assert "render.yaml" not in content
 
-    def test_claude_md_keeps_railway_section(self, tmp_path: Path):
-        content = (_render_target(tmp_path, "railway") / "CLAUDE.md").read_text()
+    def test_agents_md_keeps_railway_section(self, tmp_path: Path):
+        content = (_render_target(tmp_path, "railway") / "AGENTS.md").read_text()
         assert "## Deployment (Railway)" in content
         assert "### Railway CVE scanner" in content
         assert "Deployment (Render)" not in content
@@ -381,5 +382,5 @@ class TestPlaceholderMarkers:
     def test_docs_do_not_claim_host_injects_database_url(
         self, tmp_path: Path, target: str
     ):
-        content = (_render_target(tmp_path, target) / "CLAUDE.md").read_text()
+        content = (_render_target(tmp_path, target) / "AGENTS.md").read_text()
         assert "auto-injects" not in content

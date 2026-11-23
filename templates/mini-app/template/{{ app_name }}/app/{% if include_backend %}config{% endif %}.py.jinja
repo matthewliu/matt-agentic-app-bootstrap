@@ -1,12 +1,10 @@
 """Application configuration via environment variables."""
 
-from pathlib import Path
-
 from pydantic_settings import BaseSettings
 
-# {% if auth_provider == 'google' %}Shared platform settings for every sibling app live here. Google sign-in and
-# agent key settings never load from it (see AuthSettings below).{% else %}Shared platform credentials (Logto M2M, Railway token) live here{% endif %}
-_SHARED_ENV = Path.home() / ".agentic-apps.env"
+# Every settings class in this file reads only the process environment and this
+# app's own `.env`. No file that other apps share is read, so one app's value
+# can never configure another app.
 
 
 class Settings(BaseSettings):
@@ -61,21 +59,42 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     model_config = {
-        "env_file": (str(_SHARED_ENV), ".env"),
+        "env_file": ".env",
         "env_file_encoding": "utf-8",
-        "extra": "ignore",  # shared env has vars not in this app's schema
+        "extra": "ignore",  # .env also holds the settings of the classes below
     }
 
 
 settings = Settings()
+
+
+class LlmsTxtSettings(BaseSettings):
+    """Settings for GET /llms.txt (app/routes/llms_txt.py).
+
+    These load from the process environment and this app's own `.env` only.
+    A value shared by several apps must not make every app publish an llms.txt.
+    """
+
+    # The app's canonical public origin, e.g. https://my-app.com. Empty means
+    # /llms.txt returns 404. Set it only for an app that is meant to be public.
+    llms_txt_public_url: str = ""
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
+
+
+llms_txt_settings = LlmsTxtSettings()
 {% if auth_provider == 'google' %}
 
 class AuthSettings(BaseSettings):
     """Google sign-in and agent key settings.
 
-    These load from the process environment and this app's own `.env` only.
-    They never load from the shared `~/.agentic-apps.env`, so one app's OAuth
-    client, allowlist, or agent keys can never configure another app.
+    These load from the process environment and this app's own `.env` only,
+    so one app's OAuth client, allowlist, or agent keys can never configure
+    another app.
     app/auth/middleware.py decides which of them are required.
     """
 

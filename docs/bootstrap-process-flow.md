@@ -104,8 +104,8 @@ polling.
 ### 1. Validate inputs and preflight
 
 - Validate the lowercase, hyphenated app slug and variant/flag combination.
-- Load shared credentials and repository-local `.env` values without
-  overriding variables already exported by the shell.
+- Load `./.env` from the folder where the CLI runs, without overriding
+  variables already exported by the shell.
 - Validate required CLIs, tokens, GitHub login, Railway login, and the admin
   keystore before provisioning.
 - Resolve Railway workspace in this order: `--railway-workspace`, then

@@ -95,11 +95,14 @@ class TestCustomAppNameSubstitution:
     """Verify app name substitution across all key files."""
 
     def test_app_name_in_all_key_files(self, copier_copy):
-        """Custom app name appears in CLAUDE.md, pyproject.toml, README.md, config.py."""
+        """Custom app name appears in every key file: CLAUDE.md, AGENTS.md,
+        PRODUCT.md, README.md, pyproject.toml, config.py."""
         result_dir = copier_copy(app_name="my-special-app", include_frontend=False)
 
         files_to_check = [
             ("CLAUDE.md", "my-special-app"),
+            ("AGENTS.md", "my-special-app"),
+            ("PRODUCT.md", "my-special-app"),
             ("README.md", "my-special-app"),
             ("pyproject.toml", "my-special-app"),
             ("app/config.py", "my-special-app"),

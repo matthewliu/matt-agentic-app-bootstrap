@@ -7,8 +7,8 @@ dummy Google settings). Agent keys come from the app's own operator tool,
 ``<slug>`` CLI and the ``<slug>-mcp`` stdio server against that API.
 
 Nothing leaves the machine: no Google call (no browser sign-in happens), no
-cloud resource, no real secret. ``HOME`` points at a temp dir so the app never
-reads the operator's ``~/.agentic-apps.env``.
+cloud resource, no real secret. ``HOME`` points at a temp dir so nothing from the
+operator's home directory reaches the app.
 
 The machine-auth contract under test is
 ``docs/agent-auth-contract.md``.

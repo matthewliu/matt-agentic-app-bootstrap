@@ -22,7 +22,7 @@ Start with the [README](../README.md). Then read only the guides that match your
 | [agent-auth-contract.md](agent-auth-contract.md) | You change how the generated CLI or MCP server authenticates. |
 | [diagrams/README.md](diagrams/README.md) | You add or change a diagram. |
 
-Each new app also has its own `README.md` (setup, Google sign-in, deploy, CLI and MCP server) and `DESIGN.md` (design tokens, themes, breakpoints).
+Each new app also has its own `README.md` (setup, Google sign-in, deploy, CLI and MCP server), `AGENTS.md` (the rules every coding agent follows; `CLAUDE.md` imports it), and `PRODUCT.md` (what the app is for and what it does not do). An app with a web frontend also has `DESIGN.md` (design tokens, themes, breakpoints).
 
 ## Other options: Logto and Railway
 
